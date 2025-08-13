@@ -25,7 +25,6 @@ public class EquipmentMenu extends AbstractContainerMenu {
 
     private static final int SLOT_SIZE = 18;
 
-    // ----- 배낭 장착칸 핸들러 (insert/extract로 cap에 직접 반영)
     public static class BackpackEquipHandler extends ItemStackHandler {
         private final PlayerEquipment cap;
         private final ServerPlayer sp;
@@ -39,15 +38,12 @@ public class EquipmentMenu extends AbstractContainerMenu {
             if (!isItemValid(slot, stack) || !cap.getBackpackItem().isEmpty()) return stack;
             if (!simulate) {
                 cap.setBackpackItem(stack.copy());
-                sp.containerMenu.broadcastChanges(); // ★ 즉시 반영
+                sp.containerMenu.broadcastChanges();
                 reopen();
             }
             return ItemStack.EMPTY;
         }
-        @Override public ItemStack extractItem(int slot, int amount, boolean simulate) {
-            // ★ 마우스로는 빼지 못하게 막으려면 여기서 그냥 반환
-            return ItemStack.EMPTY;
-        }
+        @Override public ItemStack extractItem(int slot, int amount, boolean simulate) { return ItemStack.EMPTY; }
         private void reopen() {
             int w = cap.getBackpackWidth(), h = cap.getBackpackHeight();
             NetworkHooks.openScreen(
@@ -74,7 +70,7 @@ public class EquipmentMenu extends AbstractContainerMenu {
                 equip    = cap.getEquipment();
                 base2x2  = cap.getBase2x2();
                 backpack = cap.getBackpack();
-                addSlot(new SlotItemHandler(new BackpackEquipHandler(cap, sp), 0, 90, 40)); // 위치 약간 우측
+                addSlot(new SlotItemHandler(new BackpackEquipHandler(cap, sp), 0, 90, 40));
             });
         } else {
             equip    = new ItemStackHandler(PlayerEquipment.EQUIP_SLOTS);
@@ -88,7 +84,7 @@ public class EquipmentMenu extends AbstractContainerMenu {
         addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_HELMET,  60, 10));
         addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_VEST,    10, 46));
 
-        // 무기 (간격 넓힘)
+        // 무기
         addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_PRIM1, 10,  80));
         addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_PRIM2, 10, 106));
         addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_SEC,   10, 132));
@@ -100,7 +96,7 @@ public class EquipmentMenu extends AbstractContainerMenu {
             for (int col = 0; col < 2; col++)
                 addSlot(new SlotItemHandler(base2x2, col + row * 2, baseInvX + col * SLOT_SIZE, baseInvY + row * SLOT_SIZE));
 
-        // 배낭 그리드(조금 더 오른쪽)
+        // 배낭
         int bpX = 148, bpY = 40;
         if (bpW > 0 && bpH > 0) {
             for (int i = 0; i < bpW * bpH; i++) {
@@ -109,8 +105,6 @@ public class EquipmentMenu extends AbstractContainerMenu {
                 addSlot(new SlotItemHandler(backpack, i, bpX + x * SLOT_SIZE, bpY + y * SLOT_SIZE));
             }
         }
-
-        // ★ 하단 플레이어 인벤/핫바 슬롯은 붙이지 않음 → 중복 슬롯 문제 제거
     }
 
     @Override
@@ -125,6 +119,6 @@ public class EquipmentMenu extends AbstractContainerMenu {
         });
     }
 
-    @Override public net.minecraft.world.item.ItemStack quickMoveStack(Player p, int i){ return net.minecraft.world.item.ItemStack.EMPTY; }
+    @Override public ItemStack quickMoveStack(Player p, int i){ return ItemStack.EMPTY; }
     @Override public boolean stillValid(Player p){ return true; }
 }

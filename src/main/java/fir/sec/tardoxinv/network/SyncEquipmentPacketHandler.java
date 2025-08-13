@@ -28,16 +28,18 @@ public class SyncEquipmentPacketHandler {
         CHANNEL.registerMessage(id++, RotateCarriedPacket.class,  RotateCarriedPacket::encode,  RotateCarriedPacket::decode,  RotateCarriedPacket::handle);
         CHANNEL.registerMessage(id++, SyncGamerulePacket.class,   SyncGamerulePacket::encode,   SyncGamerulePacket::decode,   SyncGamerulePacket::handle);
         CHANNEL.registerMessage(id++, DropBackpackPacket.class,   DropBackpackPacket::encode,   DropBackpackPacket::decode,   DropBackpackPacket::handle);
+        // ★ 신규: 바인딩 오버레이 동기화
+        CHANNEL.registerMessage(id++, SyncUtilBindsPacket.class,  SyncUtilBindsPacket::encode,  SyncUtilBindsPacket::decode,  SyncUtilBindsPacket::handle);
     }
 
     public static void syncToClient(ServerPlayer player, PlayerEquipment equipment) {
         syncBackpackToClient(player, equipment);
+        // 바인딩 정보도 같이
+        syncUtilBindings(player, equipment);
     }
 
     public static void syncBackpackToClient(ServerPlayer player, PlayerEquipment equipment) {
         CompoundTag data = new CompoundTag();
-
-        // ★ Backpack(그리드) + BackpackItem 동시 전송
         CompoundTag bp = new CompoundTag();
         bp.putInt("Width",  equipment.getBackpackWidth());
         bp.putInt("Height", equipment.getBackpackHeight());
@@ -45,12 +47,17 @@ public class SyncEquipmentPacketHandler {
         data.put("Backpack", bp);
 
         if (!equipment.getBackpackItem().isEmpty()) {
-            data.put("BackpackItem", equipment.getBackpackItem().save(new CompoundTag())); // ★ 추가
+            data.put("BackpackItem", equipment.getBackpackItem().save(new CompoundTag()));
         } else {
-            data.put("BackpackItem", new CompoundTag()); // 빈 태그로 표시
+            data.put("BackpackItem", new CompoundTag());
         }
 
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncEquipmentPacket(data));
+    }
+
+    /** ★ 오버레이 표시용 바인딩 동기화 */
+    public static void syncUtilBindings(ServerPlayer player, PlayerEquipment equipment) {
+        SyncUtilBindsPacket.send(player, equipment);
     }
 
     public static void sendOpenEquipment(int w, int h) {

@@ -6,11 +6,9 @@ import fir.sec.tardoxinv.capability.PlayerEquipment;
 import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.network.NetworkEvent;
 
-import java.util.UUID;
 import java.util.function.Supplier;
 
 public class AssignHotbarPacket {
@@ -27,64 +25,47 @@ public class AssignHotbarPacket {
             if (!use) return;
             if (m.hotbarIndex < 4 || m.hotbarIndex > 8) return;
 
-            ItemStack st = sp.containerMenu.getCarried();
-            if (st.isEmpty() || !st.hasTag()) return;
-            if (!"utility".equals(st.getTag().getString("slot_type"))) return;
+            ItemStack carried = sp.containerMenu.getCarried();
+            if (carried.isEmpty() || !carried.hasTag()) return;
+            if (!"utility".equals(carried.getTag().getString("slot_type"))) return;
 
-            LinkIdUtil.ensureLinkId(st);
-            UUID id = LinkIdUtil.getLinkId(st);
+            LinkIdUtil.ensureLinkId(carried);
+            var id = LinkIdUtil.getLinkId(carried);
 
-            // 저장소에도 같은 아이템 있으면 link 맞춰주기(최초 할당 보정)
             sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-                var base = cap.getBase2x2();
-                var bp   = cap.getBackpack();
-                java.util.function.Consumer<net.minecraftforge.items.ItemStackHandler> fix = handler -> {
-                    for (int i = 0; i < handler.getSlots(); i++) {
-                        ItemStack it = handler.getStackInSlot(i);
-                        if (it.isEmpty()) continue;
-                        if (!it.hasTag() || !it.getTag().hasUUID("link_id")) {
-                            if (it.getItem() == st.getItem()) {
-                                it.getOrCreateTag().putUUID("link_id", id);
-                                handler.setStackInSlot(i, it);
-                                break;
-                            }
-                        }
+                // 우선 link_id로 원본 슬롯 탐색 → 없으면 동일 아이템 첫 슬롯
+                int baseIdx = findByLinkOrItem(cap.getBase2x2(), carried, id);
+                if (baseIdx >= 0) {
+                    cap.bindFromBase(sp, m.hotbarIndex, baseIdx);
+                } else {
+                    int bpIdx = findByLinkOrItem(cap.getBackpack(), carried, id);
+                    if (bpIdx >= 0) {
+                        cap.bindFromBackpack(sp, m.hotbarIndex, bpIdx);
+                    } else {
+                        return; // 원본이 없으면 바인딩 불가
                     }
-                };
-                fix.accept(base);
-                fix.accept(bp);
+                }
+                cap.tickMirrorUtilityHotbar(sp);
             });
-
-            // 같은 link_id가 4~8에 있으면 비움
-            for (Slot s : sp.containerMenu.slots) {
-                if (s.container == sp.getInventory()) {
-                    int idx = s.getSlotIndex();
-                    if (idx >= 4 && idx <= 8) {
-                        ItemStack cur = s.getItem();
-                        if (!cur.isEmpty() && cur.hasTag() && cur.getTag().hasUUID("link_id")
-                                && id.equals(cur.getTag().getUUID("link_id"))) {
-                            s.set(ItemStack.EMPTY);
-                            sp.getInventory().setItem(idx, ItemStack.EMPTY);
-                        }
-                    }
-                }
-            }
-
-            // 핫바 채우기
-            sp.getInventory().setItem(m.hotbarIndex, st.copy());
-            for (Slot s : sp.containerMenu.slots) {
-                if (s.container == sp.getInventory() && s.getSlotIndex() == m.hotbarIndex) {
-                    s.set(st.copy());
-                    break;
-                }
-            }
-
-            // 유틸 매핑/카운트 즉시 갱신
-            sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> cap.recordUtilityAssignment(sp, m.hotbarIndex, id));
 
             sp.containerMenu.broadcastChanges();
             sp.inventoryMenu.broadcastChanges();
         });
         ctx.get().setPacketHandled(true);
+    }
+
+    private static int findByLinkOrItem(net.minecraftforge.items.ItemStackHandler h, ItemStack target, java.util.UUID id) {
+        // 1) link_id 일치 우선
+        for (int i = 0; i < h.getSlots(); i++) {
+            ItemStack it = h.getStackInSlot(i);
+            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
+                    && id.equals(it.getTag().getUUID("link_id"))) return i;
+        }
+        // 2) 같은 아이템(태그 포함) 첫 슬롯
+        for (int i = 0; i < h.getSlots(); i++) {
+            ItemStack it = h.getStackInSlot(i);
+            if (!it.isEmpty() && ItemStack.isSameItemSameTags(it, target)) return i;
+        }
+        return -1;
     }
 }

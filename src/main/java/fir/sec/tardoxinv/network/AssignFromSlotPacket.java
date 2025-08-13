@@ -10,11 +10,10 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.network.NetworkEvent;
 
-import java.util.UUID;
 import java.util.function.Supplier;
 
 public class AssignFromSlotPacket {
-    private final int slotId;
+    private final int slotId;      // EquipmentMenu 내 슬롯 id
     private final int hotbarIndex; // 4..8
 
     public AssignFromSlotPacket(int slotId, int hotbarIndex){ this.slotId=slotId; this.hotbarIndex=hotbarIndex; }
@@ -33,37 +32,24 @@ public class AssignFromSlotPacket {
             ItemStack st = src.getItem();
             if (st.isEmpty() || !st.hasTag()) return;
             if (!"utility".equals(st.getTag().getString("slot_type"))) return;
-
             LinkIdUtil.ensureLinkId(st);
-            src.set(st); // 소스 슬롯에도 동일 link 유지
-            UUID id = LinkIdUtil.getLinkId(st);
+            src.set(st); // 원본에 link 보장
 
-            // 같은 link_id가 4~8에 있으면 비우기
-            for (Slot s : sp.containerMenu.slots) {
-                if (s.container == sp.getInventory()) {
-                    int idx = s.getSlotIndex();
-                    if (idx >= 4 && idx <= 8) {
-                        ItemStack cur = s.getItem();
-                        if (!cur.isEmpty() && cur.hasTag() && cur.getTag().hasUUID("link_id")
-                                && id.equals(cur.getTag().getUUID("link_id"))) {
-                            s.set(ItemStack.EMPTY);
-                            sp.getInventory().setItem(idx, ItemStack.EMPTY);
-                        }
-                    }
+            sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
+                final int baseStart = 1 + PlayerEquipment.EQUIP_SLOTS;      // 0:배낭장착, 1..7:장비, 8..11:2x2, 12..:배낭
+                final int baseEnd   = baseStart + 4 - 1;
+                final int bpStart   = baseStart + 4;
+                final int bpSlots   = cap.getBackpack().getSlots();
+                if (m.slotId >= baseStart && m.slotId <= baseEnd) {
+                    int baseIdx = m.slotId - baseStart;
+                    cap.bindFromBase(sp, m.hotbarIndex, baseIdx);
+                } else if (m.slotId >= bpStart && m.slotId < bpStart + bpSlots) {
+                    int bpIdx = m.slotId - bpStart;
+                    cap.bindFromBackpack(sp, m.hotbarIndex, bpIdx);
                 }
-            }
-
-            // 핫바 채우기
-            sp.getInventory().setItem(m.hotbarIndex, st.copy());
-            for (Slot s : sp.containerMenu.slots) {
-                if (s.container == sp.getInventory() && s.getSlotIndex() == m.hotbarIndex) {
-                    s.set(st.copy());
-                    break;
-                }
-            }
-
-            // 유틸 매핑/카운트 즉시 갱신
-            sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> cap.recordUtilityAssignment(sp, m.hotbarIndex, id));
+                // 즉시 미러
+                cap.tickMirrorUtilityHotbar(sp);
+            });
 
             sp.containerMenu.broadcastChanges();
             sp.inventoryMenu.broadcastChanges();

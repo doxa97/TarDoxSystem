@@ -1,13 +1,16 @@
 package fir.sec.tardoxinv.capability;
 
+import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
 
-import java.util.Objects;
-import java.util.UUID;
+import java.util.*;
 
 public class PlayerEquipment {
 
@@ -48,7 +51,8 @@ public class PlayerEquipment {
             ItemStack a = getStackInSlot(SLOT_PRIM1);
             ItemStack b = getStackInSlot(SLOT_PRIM2);
             if (a.isEmpty() || b.isEmpty()) return;
-            UUID la = LinkIdUtil.getLinkId(a), lb = LinkIdUtil.getLinkId(b);
+            var la = LinkIdUtil.getLinkId(a);
+            var lb = LinkIdUtil.getLinkId(b);
             if (la != null && la.equals(lb)) setStackInSlot(changedSlot, ItemStack.EMPTY);
         }
     };
@@ -134,6 +138,18 @@ public class PlayerEquipment {
         bp.put("Items", backpack.serializeNBT());
         tag.put("Backpack", bp);
         if (!backpackItem.isEmpty()) tag.put("BackpackItem", backpackItem.save(new CompoundTag()));
+
+        // 바인딩 저장(지속성)
+        ListTag binds = new ListTag();
+        for (Map.Entry<Integer, UtilBinding> e : utilBindByHotbar.entrySet()) {
+            CompoundTag b = new CompoundTag();
+            b.putInt("Hotbar", e.getKey());
+            b.putString("Storage", e.getValue().storage == Storage.BASE ? "base" : "backpack");
+            b.putInt("Index", e.getValue().index);
+            if (e.getValue().id != null) b.putUUID("Id", e.getValue().id);
+            binds.add(b);
+        }
+        tag.put("UtilBinds", binds);
         return tag;
     }
 
@@ -157,101 +173,159 @@ public class PlayerEquipment {
             if (!s.isEmpty()) LinkIdUtil.ensureLinkId(s);
         }
         dirty = false;
+
+        // 바인딩 복원
+        utilBindByHotbar.clear();
+        lastCountByHotbar.clear();
+        if (tag.contains("UtilBinds", Tag.TAG_LIST)) {
+            ListTag binds = tag.getList("UtilBinds", Tag.TAG_COMPOUND);
+            for (Tag t : binds) {
+                CompoundTag b = (CompoundTag) t;
+                int hb = b.getInt("Hotbar");
+                String st = b.getString("Storage");
+                int idx = b.getInt("Index");
+                UUID id = b.contains("Id") ? b.getUUID("Id") : null;
+                Storage storage = "base".equals(st) ? Storage.BASE : Storage.BACKPACK;
+                utilBindByHotbar.put(hb, new UtilBinding(storage, idx, id));
+            }
+        }
     }
 
     public static void ensureLink(ItemStack stack) { if (!stack.isEmpty()) LinkIdUtil.ensureLinkId(stack); }
     public boolean isDirty() { return dirty; }
     public void clearDirty() { dirty = false; }
 
-    // --- 유틸 핫바 동기화 상태 ---
-    private final java.util.Map<java.util.UUID, Integer> utilHotbarCount = new java.util.HashMap<>();
-    private final java.util.Map<Integer, java.util.UUID> utilHotbarSlotId = new java.util.HashMap<>();
+    // ---------- 유틸 바인딩(핫바 5~9) ----------
+    public enum Storage { BASE, BACKPACK }
+    public static class UtilBinding {
+        public final Storage storage;
+        public final int index;
+        public final UUID id;
+        public UtilBinding(Storage s, int idx, UUID id) { this.storage = s; this.index = idx; this.id = id; }
+    }
 
-    /** 유틸 핫바에 등록/재등록될 때 서버에서 즉시 매핑 갱신 */
-    public void recordUtilityAssignment(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, java.util.UUID id) {
-        // 같은 id가 다른 번호에 있으면 제거
-        utilHotbarSlotId.entrySet().removeIf(e -> e.getValue().equals(id));
-        utilHotbarSlotId.put(hotbarIdx, id);
+    private final Map<Integer, UtilBinding> utilBindByHotbar = new HashMap<>();   // key: 4..8
+    private final Map<Integer, Integer>     lastCountByHotbar = new HashMap<>();  // key: 4..8 → 이전 틱 핫바 수량
 
-        ItemStack hb = sp.getInventory().getItem(hotbarIdx);
-        utilHotbarCount.put(id, hb.getCount());
+    /** 클라이언트(오버레이) 전용: 서버가 보낸 바인딩 스냅샷을 수신해서 로컬 표시용으로 세팅 */
+    public void clientSetBinding(int hotbarIdx, Storage storage, int index) {
+        if (storage == null) {
+            utilBindByHotbar.remove(hotbarIdx);
+        } else {
+            utilBindByHotbar.put(hotbarIdx, new UtilBinding(storage, index, null));
+        }
+    }
+    /** 클라이언트 오버레이가 읽는 getter */
+    public UtilBinding peekBinding(int hotbarIdx) { return utilBindByHotbar.get(hotbarIdx); }
 
+    /** ★ 같은 id/같은 원본을 가리키던 다른 슬롯과, 대상 슬롯의 기존 바인딩을 모두 해제 후 새로 바인딩 */
+    private void bindInternal(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, UtilBinding b) {
+        // 1) 같은 id 또는 같은 원본(storage+index)을 가진 다른 핫바 슬롯 수집
+        List<Integer> toClear = new ArrayList<>();
+        for (Map.Entry<Integer, UtilBinding> e : utilBindByHotbar.entrySet()) {
+            int otherIdx = e.getKey();
+            if (otherIdx == hotbarIdx) continue;
+            UtilBinding ob = e.getValue();
+            boolean sameId = (b.id != null && ob.id != null && b.id.equals(ob.id));
+            boolean sameSource = (ob.storage == b.storage && ob.index == b.index);
+            if (sameId || sameSource) toClear.add(otherIdx);
+        }
+        // 2) 실제 해제
+        for (int idx : toClear) unbind(sp, idx);
+        // 3) 대상 슬롯 기존 바인딩 해제
+        if (utilBindByHotbar.containsKey(hotbarIdx)) unbind(sp, hotbarIdx);
+
+        // 4) 새 바인딩 적용
+        utilBindByHotbar.put(hotbarIdx, b);
+        lastCountByHotbar.put(hotbarIdx, 0); // 초기 소진 오인 방지
+        mirrorOne(sp, hotbarIdx);
+
+        // 5) 클라 오버레이 동기화
+        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
+    }
+
+    public void bindFromBase(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, int baseIndex) {
+        ItemStack src = base2x2.getStackInSlot(baseIndex);
+        if (src.isEmpty() || !src.hasTag() || !"utility".equals(src.getTag().getString("slot_type"))) return;
+        LinkIdUtil.ensureLinkId(src);
+        base2x2.setStackInSlot(baseIndex, src);
+        bindInternal(sp, hotbarIdx, new UtilBinding(Storage.BASE, baseIndex, LinkIdUtil.getLinkId(src)));
+    }
+
+    public void bindFromBackpack(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, int bpIndex) {
+        ItemStack src = backpack.getStackInSlot(bpIndex);
+        if (src.isEmpty() || !src.hasTag() || !"utility".equals(src.getTag().getString("slot_type"))) return;
+        LinkIdUtil.ensureLinkId(src);
+        backpack.setStackInSlot(bpIndex, src);
+        bindInternal(sp, hotbarIdx, new UtilBinding(Storage.BACKPACK, bpIndex, LinkIdUtil.getLinkId(src)));
+    }
+
+    public void unbind(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx) {
+        utilBindByHotbar.remove(hotbarIdx);
+        lastCountByHotbar.remove(hotbarIdx);
+        sp.getInventory().setItem(hotbarIdx, ItemStack.EMPTY);
+        forceHotbarSlot(sp, hotbarIdx);
+        // 오버레이 동기화
+        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
+    }
+
+    public boolean isHotbarBound(int hotbarIdx) { return utilBindByHotbar.containsKey(hotbarIdx); }
+    public boolean isUtilityIdAssigned(UUID id)  { return utilBindByHotbar.values().stream().anyMatch(b -> Objects.equals(b.id, id)); }
+
+    /** 매 틱: 원본→핫바 미러링 & 핫바에서 소비된 만큼 원본 감소 */
+    public void tickMirrorUtilityHotbar(net.minecraft.server.level.ServerPlayer sp) {
+        for (int i = 4; i <= 8; i++) mirrorOne(sp, i);
+    }
+
+    private void mirrorOne(net.minecraft.server.level.ServerPlayer sp, int i) {
+        UtilBinding b = utilBindByHotbar.get(i);
+        if (b == null) return;
+
+        ItemStack src = switch (b.storage) {
+            case BASE -> base2x2.getStackInSlot(b.index);
+            case BACKPACK -> backpack.getStackInSlot(b.index);
+        };
+
+        // 원본 무효/변경 → 해제
+        if (src.isEmpty() || !src.hasTag() || !"utility".equals(src.getTag().getString("slot_type"))) { unbind(sp, i); return; }
+        UUID srcId = LinkIdUtil.getLinkId(src);
+        if (b.id != null && (srcId == null || !b.id.equals(srcId))) { unbind(sp, i); return; }
+
+        ItemStack hb  = sp.getInventory().getItem(i);
+        int hbCount   = hb.isEmpty() ? 0 : hb.getCount();
+        int prev      = lastCountByHotbar.getOrDefault(i, hbCount);
+
+        if (hbCount < prev) {
+            int used = prev - hbCount;
+            if (used > 0) {
+                ItemStack s = src.copy();
+                s.shrink(used);
+                setSource(b, s.isEmpty() ? ItemStack.EMPTY : s);
+                src = s.isEmpty() ? ItemStack.EMPTY : s;
+            }
+        }
+
+        if (src.isEmpty()) { unbind(sp, i); return; }
+
+        ItemStack mirror = src.copy();
+        sp.getInventory().setItem(i, mirror);
+        forceHotbarSlot(sp, i);
+        lastCountByHotbar.put(i, mirror.getCount());
+    }
+
+    private void setSource(UtilBinding b, ItemStack newStack) {
+        if (b.storage == Storage.BASE) base2x2.setStackInSlot(b.index, newStack);
+        else                           backpack.setStackInSlot(b.index, newStack);
         dirty = true;
     }
 
-    /** 틱마다: 핫바 수량 감소 → 저장소에서 소모 / 0이면 핫바도 비움 */
-    public void syncUtilityHotbar(net.minecraft.server.level.ServerPlayer sp) {
-        for (int i = 4; i <= 8; i++) {
-            ItemStack st = sp.getInventory().getItem(i);
-            java.util.UUID id = LinkIdUtil.getLinkId(st);
-
-            if (id == null) {
-                utilHotbarSlotId.remove(i);
-                continue;
-            }
-            utilHotbarSlotId.put(i, id);
-
-            int now = st.getCount();
-            int prev = utilHotbarCount.getOrDefault(id, now);
-
-            if (now < prev) {
-                int delta = prev - now;
-                consumeFromStorageByLink(id, delta);
-            }
-
-            // ★ 핫바가 0개가 되었고, 저장소에도 더 이상 없으면 핫바 슬롯 비우기
-            if (now <= 0 && countInStorageByLink(id) <= 0) {
-                sp.getInventory().setItem(i, ItemStack.EMPTY);
-                utilHotbarSlotId.remove(i);
-                utilHotbarCount.remove(id);
-                sp.inventoryMenu.broadcastChanges();
-            } else {
-                utilHotbarCount.put(id, Math.max(now, 0));
-            }
-        }
-    }
-
-    private void consumeFromStorageByLink(java.util.UUID id, int delta) {
-        if (delta <= 0) return;
-        for (int s = 0; s < base2x2.getSlots() && delta > 0; s++) {
-            ItemStack it = base2x2.getStackInSlot(s);
-            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
-                    && id.equals(it.getTag().getUUID("link_id"))) {
-                int take = Math.min(delta, it.getCount());
-                it.shrink(take);
-                if (it.isEmpty()) base2x2.setStackInSlot(s, ItemStack.EMPTY);
-                delta -= take;
-            }
-        }
-        for (int s = 0; s < backpack.getSlots() && delta > 0; s++) {
-            ItemStack it = backpack.getStackInSlot(s);
-            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
-                    && id.equals(it.getTag().getUUID("link_id"))) {
-                int take = Math.min(delta, it.getCount());
-                it.shrink(take);
-                if (it.isEmpty()) backpack.setStackInSlot(s, ItemStack.EMPTY);
-                delta -= take;
-            }
-        }
-        dirty = true;
-    }
-
-    private int countInStorageByLink(java.util.UUID id) {
-        int total = 0;
-        for (int s = 0; s < base2x2.getSlots(); s++) {
-            ItemStack it = base2x2.getStackInSlot(s);
-            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
-                    && id.equals(it.getTag().getUUID("link_id"))) {
-                total += it.getCount();
-            }
-        }
-        for (int s = 0; s < backpack.getSlots(); s++) {
-            ItemStack it = backpack.getStackInSlot(s);
-            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
-                    && id.equals(it.getTag().getUUID("link_id"))) {
-                total += it.getCount();
-            }
-        }
-        return total;
+    public static void forceHotbarSlot(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx0to8) {
+        ItemStack stack = sp.getInventory().getItem(hotbarIdx0to8).copy();
+        sp.connection.send(new ClientboundContainerSetSlotPacket(
+                sp.inventoryMenu.containerId,
+                sp.inventoryMenu.incrementStateId(),
+                36 + hotbarIdx0to8,
+                stack
+        ));
     }
 }
