@@ -1,0 +1,6 @@
+<component name="ArtifactManager">
+  <artifact type="jar" build-on-make="true" name="TarDoxSystem">
+    <output-path>$USER_HOME$/OneDrive/바탕 화면/　/손수제작모드</output-path>
+    <root id="archive" name="TarDoxSystem.jar" />
+  </artifact>
+</component>
