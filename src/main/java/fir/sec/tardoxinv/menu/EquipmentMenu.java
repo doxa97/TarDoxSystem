@@ -1,5 +1,6 @@
 package fir.sec.tardoxinv.menu;
 
+import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
 import net.minecraft.network.chat.Component;
@@ -10,7 +11,6 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
-import net.minecraftforge.items.SlotItemHandler;
 import net.minecraftforge.network.NetworkHooks;
 
 public class EquipmentMenu extends AbstractContainerMenu {
@@ -19,8 +19,8 @@ public class EquipmentMenu extends AbstractContainerMenu {
     private final boolean serverSide;
 
     private ItemStackHandler equip;
-    private ItemStackHandler base2x2;
-    private ItemStackHandler backpack;
+    private GridItemHandler2D base2x2;
+    private GridItemHandler2D backpack;
     private final int bpW, bpH;
 
     private static final int SLOT_SIZE = 18;
@@ -68,41 +68,41 @@ public class EquipmentMenu extends AbstractContainerMenu {
             ServerPlayer sp = (ServerPlayer) player;
             player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
                 equip    = cap.getEquipment();
-                base2x2  = cap.getBase2x2();
-                backpack = cap.getBackpack();
-                addSlot(new SlotItemHandler(new BackpackEquipHandler(cap, sp), 0, 90, 40));
+                base2x2  = cap.getBase2x2();    // 2x2
+                backpack = cap.getBackpack2D(); // 2D
+                addSlot(new net.minecraftforge.items.SlotItemHandler(new BackpackEquipHandler(cap, sp), 0, 90, 40));
             });
         } else {
             equip    = new ItemStackHandler(PlayerEquipment.EQUIP_SLOTS);
-            base2x2  = new ItemStackHandler(4);
-            backpack = new ItemStackHandler(Math.max(0, backpackWidth * backpackHeight));
-            addSlot(new SlotItemHandler(new ItemStackHandler(1), 0, 90, 40));
+            base2x2  = new GridItemHandler2D(2, 2);
+            backpack = new GridItemHandler2D(Math.max(0, backpackWidth), Math.max(0, backpackHeight));
+            addSlot(new net.minecraftforge.items.SlotItemHandler(new ItemStackHandler(1), 0, 90, 40));
         }
 
-        // 장비
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_HEADSET, 10, 10));
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_HELMET,  60, 10));
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_VEST,    10, 46));
+        // 장비 슬롯(타입 강제) — 기능 2
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_HEADSET, 10, 10,  "headset"));
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_HELMET,  60, 10,  "helmet"));
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_VEST,    10, 46,  "vest"));
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_PRIM1,   10, 80,  "primary_weapon"));
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_PRIM2,   10, 106, "primary_weapon"));
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_SEC,     10, 132, "secondary_weapon"));
+        addSlot(new CustomSlot(equip, PlayerEquipment.SLOT_MELEE,   10, 158, "melee_weapon"));
 
-        // 무기
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_PRIM1, 10,  80));
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_PRIM2, 10, 106));
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_SEC,   10, 132));
-        addSlot(new SlotItemHandler(equip, PlayerEquipment.SLOT_MELEE, 10, 158));
-
-        // 기본 2x2
+        // 기본 2x2 (GridSlot)
         int baseInvX = 80, baseInvY = 150;
         for (int row = 0; row < 2; row++)
-            for (int col = 0; col < 2; col++)
-                addSlot(new SlotItemHandler(base2x2, col + row * 2, baseInvX + col * SLOT_SIZE, baseInvY + row * SLOT_SIZE));
+            for (int col = 0; col < 2; col++){
+                int idx = col + row * 2;
+                addSlot(new GridSlot(base2x2, idx, baseInvX + col * SLOT_SIZE, baseInvY + row * SLOT_SIZE, GridSlot.Storage.BASE));
+            }
 
-        // 배낭
+        // 배낭 그리드
         int bpX = 148, bpY = 40;
         if (bpW > 0 && bpH > 0) {
             for (int i = 0; i < bpW * bpH; i++) {
                 int x = i % bpW;
                 int y = i / bpW;
-                addSlot(new SlotItemHandler(backpack, i, bpX + x * SLOT_SIZE, bpY + y * SLOT_SIZE));
+                addSlot(new GridSlot(backpack, i, bpX + x * SLOT_SIZE, bpY + y * SLOT_SIZE, GridSlot.Storage.BACKPACK));
             }
         }
     }
