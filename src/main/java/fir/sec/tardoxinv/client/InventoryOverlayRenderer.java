@@ -16,9 +16,6 @@ import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-/** 장비 화면 오버레이:
- *  - 바인딩 번호(5~9) 배지: 항상 아이템 아이콘 위에 보이도록 Z-깊이 올림
- *  - 멀티칸 아이템: 앵커 슬롯에 마우스오버 시, 점유 영역을 회색으로 표시 */
 @Mod.EventBusSubscriber(modid = TarDoxInv.MODID, value = Dist.CLIENT)
 public class InventoryOverlayRenderer {
 
@@ -34,18 +31,21 @@ public class InventoryOverlayRenderer {
         int left = scr.getGuiLeft();
         int top  = scr.getGuiTop();
 
-        // ----- 1) 멀티칸 점유 영역 회색 표시(호버 앵커만)
+        // ----- (A) 멀티칸 점유 영역: 항상 표시 (호버는 진하게)
         Slot hover = scr.getSlotUnderMouse();
-        if (hover instanceof GridSlot && !hover.getItem().isEmpty()) {
-            ItemStack st = hover.getItem();
+        for (Slot s : scr.getMenu().slots) {
+            if (!(s instanceof GridSlot)) continue;
+            ItemStack st = s.getItem();
+            if (st.isEmpty()) continue;
+
             int w = st.hasTag() ? Math.max(1, st.getTag().getInt("Width")) : 1;
             int h = st.hasTag() ? Math.max(1, st.getTag().getInt("Height")) : 1;
-            // 슬롯 크기 18, 내부 16px 기준으로 약간 여백
-            int baseX = left + hover.x;
-            int baseY = top  + hover.y;
+            int baseX = left + s.x;
+            int baseY = top  + s.y;
+
+            int color = (s == hover) ? 0x66000000 : 0x33000000; // 호버 진하게
             g.pose().pushPose();
-            g.pose().translate(0, 0, 250); // 아이콘 위에
-            int color = 0x55000000; // 반투명 회색
+            g.pose().translate(0, 0, 250);
             for (int dx=0; dx<w; dx++){
                 for (int dy=0; dy<h; dy++){
                     int x = baseX + dx*18;
@@ -56,7 +56,7 @@ public class InventoryOverlayRenderer {
             g.pose().popPose();
         }
 
-        // ----- 2) 바인딩 번호 배지(가독성 개선: Z-깊이 상승)
+        // ----- (B) 바인딩 번호 배지(가독성 ↑)
         mc.player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
             final int baseStart = 1 + PlayerEquipment.EQUIP_SLOTS; // 8
             final int baseEnd   = baseStart + 4 - 1;               // 11
@@ -65,7 +65,7 @@ public class InventoryOverlayRenderer {
             for (int si = 0; si < scr.getMenu().slots.size(); si++) {
                 Slot slot = scr.getMenu().slots.get(si);
 
-                // 2x2
+                // 기본 2×2
                 if (si >= baseStart && si <= baseEnd) {
                     int baseIdx = si - baseStart;
                     int hotbar = findHotbarFor(cap, PlayerEquipment.Storage.BASE, baseIdx);
@@ -91,14 +91,16 @@ public class InventoryOverlayRenderer {
         return -1;
     }
 
-    /** 아이콘 위로 끌어올려 표시 */
     private static void drawBadgeAbove(GuiGraphics g, Font font, int slotPx, int slotPy, String text) {
         g.pose().pushPose();
         g.pose().translate(0, 0, 300);
         int x = slotPx + 1;
         int y = slotPy + 1;
         int w = font.width(text);
-        g.fill(x - 2, y - 1, x + w + 2, y + 9, 0xAA000000);
+        // 더 넓은 배경 + 테두리
+        g.fill(x - 3, y - 2, x + w + 3, y + 10, 0xC0000000);
+        g.hLine(x - 3, x + w + 3, y - 2, 0x80FFFFFF);
+        g.hLine(x - 3, x + w + 3, y + 10, 0x80000000);
         g.drawString(font, text, x, y, 0xFFFFFF, true);
         g.pose().popPose();
     }

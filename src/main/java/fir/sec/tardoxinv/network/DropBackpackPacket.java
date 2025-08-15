@@ -27,6 +27,9 @@ public class DropBackpackPacket {
                 ItemStack cur = cap.getBackpackItem();
                 if (cur.isEmpty()) return;
 
+                // 0) UI를 먼저 안전하게 닫는다 (그리드 크기 변경 전)
+                if (sp.containerMenu != null) sp.closeContainer();
+
                 // 1) 드롭 아이템 구성(내용물 NBT 포함)
                 ItemStack out = cur.copy();
                 var data = new net.minecraft.nbt.CompoundTag();
@@ -40,13 +43,12 @@ public class DropBackpackPacket {
                 ent.setPickUpDelay(60);
                 sp.level().addFreshEntity(ent);
 
-                // 3) 캡 상태 초기화
+                // 3) 캡 상태 초기화: 아이템 제거 + 그리드 0×0로 축소
                 cap.setBackpackItem(ItemStack.EMPTY);
-                sp.containerMenu.broadcastChanges();
-                SyncEquipmentPacketHandler.syncToClient(sp, cap);
+                cap.resizeBackpack(0, 0);
 
-                // 4) UI 안전하게 재오픈(크래시 방지: 먼저 닫고, 0x0으로 열기)
-                if (sp.containerMenu != null) sp.closeContainer();
+                // 4) 클라 동기화 후, 0×0으로 다시 열어 빈 그리드 보이게
+                SyncEquipmentPacketHandler.syncToClient(sp, cap);
                 int bw = 0, bh = 0;
                 NetworkHooks.openScreen(
                         sp,
