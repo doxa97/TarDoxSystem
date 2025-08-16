@@ -1,53 +1,46 @@
 package fir.sec.tardoxinv.network;
 
-import fir.sec.tardoxinv.capability.ModCapabilities;
-import fir.sec.tardoxinv.capability.PlayerEquipment;
-import net.minecraft.client.Minecraft;
+import fir.sec.tardoxinv.client.ClientHotbarBindings;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
 
+/** 서버→클라: 유틸 바인딩 스냅샷 전달 */
 public class SyncUtilBindsPacket {
-    public byte[] storage = new byte[PlayerEquipment.HOTBAR_COUNT];
-    public int[]  index   = new int[PlayerEquipment.HOTBAR_COUNT];
+    private final byte[] storageByHb;
+    private final int[]  indexByHb;
 
-    // ★ 새로 추가: 서버에서 보낼 때 편의용
-    public SyncUtilBindsPacket(byte[] storage, int[] index) {
-        this.storage = storage;
-        this.index   = index;
+    public SyncUtilBindsPacket(byte[] storageByHb, int[] indexByHb) {
+        this.storageByHb = storageByHb;
+        this.indexByHb = indexByHb;
     }
 
-    public SyncUtilBindsPacket() {} // 디코더용
-
     public static void encode(SyncUtilBindsPacket msg, FriendlyByteBuf buf) {
-        for (int i = 0; i < PlayerEquipment.HOTBAR_COUNT; i++) buf.writeByte(msg.storage[i]);
-        for (int i = 0; i < PlayerEquipment.HOTBAR_COUNT; i++) buf.writeVarInt(msg.index[i]);
+        buf.writeVarInt(msg.storageByHb.length);
+        for (byte b : msg.storageByHb) buf.writeByte(b);
+        buf.writeVarInt(msg.indexByHb.length);
+        for (int i : msg.indexByHb) buf.writeVarInt(i);
     }
 
     public static SyncUtilBindsPacket decode(FriendlyByteBuf buf) {
-        SyncUtilBindsPacket p = new SyncUtilBindsPacket();
-        for (int i = 0; i < PlayerEquipment.HOTBAR_COUNT; i++) p.storage[i] = buf.readByte();
-        for (int i = 0; i < PlayerEquipment.HOTBAR_COUNT; i++) p.index[i]   = buf.readVarInt();
-        return p;
+        int n1 = buf.readVarInt();
+        byte[] st = new byte[n1];
+        for (int i = 0; i < n1; i++) st[i] = buf.readByte();
+        int n2 = buf.readVarInt();
+        int[] idx = new int[n2];
+        for (int i = 0; i < n2; i++) idx[i] = buf.readVarInt();
+        return new SyncUtilBindsPacket(st, idx);
     }
 
     public static void handle(SyncUtilBindsPacket msg, Supplier<NetworkEvent.Context> ctx) {
-        ctx.get().enqueueWork(() -> {
-            var mc = Minecraft.getInstance();
-            if (mc.player == null) return;
-            mc.player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-                for (int hb = 0; hb < PlayerEquipment.HOTBAR_COUNT; hb++) {
-                    if (msg.storage[hb] < 0) {
-                        cap.clientSetBinding(hb, null, -1);
-                        continue;
-                    }
-                    PlayerEquipment.Storage s = (msg.storage[hb] == 0)
-                            ? PlayerEquipment.Storage.BASE : PlayerEquipment.Storage.BACKPACK;
-                    cap.clientSetBinding(hb, s, msg.index[hb]);
-                }
-            });
-        });
+        ctx.get().enqueueWork(() ->
+                DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () ->
+                        ClientHotbarBindings.setAll(msg.storageByHb, msg.indexByHb)
+                )
+        );
         ctx.get().setPacketHandled(true);
     }
 }

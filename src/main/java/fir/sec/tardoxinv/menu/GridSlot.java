@@ -1,51 +1,33 @@
-package fir.sec.tardoxinv.menu;
+package fir.sec.tardoxinv.menu.slot;
 
-import fir.sec.tardoxinv.capability.GridItemHandler2D;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.minecraftforge.items.IItemHandler;
+import net.minecraftforge.items.SlotItemHandler;
 
 /**
- * 2D 그리드용 슬롯
- * - 빈 칸이면 grid.canPlaceAt 로 배치 가능 여부 판단
- * - 앵커(실제 아이템이 들어있는 칸)만 픽업 허용
- * - AssignFromSlotPacket 에서 필요로 하는 Storage 구분자/게터 제공
+ * 2D 그리드 슬롯. Storage(BACKPACK/BASE) + 인덱스를 보존.
+ * (오버레이/바인딩 추적에 사용)
  */
-public class GridSlot extends Slot {
+public class GridSlot extends SlotItemHandler {
 
     public enum Storage { BASE, BACKPACK }
 
-    private final GridItemHandler2D grid;
-    private final int gridIndex;
     private final Storage storage;
+    private final int gridIndex;
 
-    /** 기본: BASE 스토리지로 간주 */
-    public GridSlot(GridItemHandler2D grid, int gridIndex, int x, int y) {
-        this(Storage.BASE, grid, gridIndex, x, y);
-    }
-
-    /** 명시적 스토리지 지정 */
-    public GridSlot(Storage storage, GridItemHandler2D grid, int gridIndex, int x, int y) {
-        // Slot 은 Container 기반이지만 여기서는 화면/클릭 판정만 사용하므로
-        // 1칸짜리 더미 컨테이너를 전달
-        super(new net.minecraft.world.SimpleContainer(1), 0, x, y);
-        this.grid = grid;
-        this.gridIndex = gridIndex;
+    public GridSlot(Storage storage, IItemHandler handler, int index, int x, int y) {
+        super(handler, index, x, y);
         this.storage = storage;
+        this.gridIndex = index;
     }
 
-    public int getGridIndex() { return gridIndex; }
     public Storage getStorage() { return storage; }
+    public int getIndex() { return gridIndex; }
 
-    /** 커서 아이템을 둘 수 있는지(해당 위치가 비어 있고, 크기 배치가 가능한지) */
-    @Override
-    public boolean mayPlace(ItemStack stack) {
-        return grid.getStackInSlot(gridIndex).isEmpty() && grid.canPlaceAt(gridIndex, stack);
-    }
+    // record 스타일 메서드명도 제공(서버 이벤트에서 쓰임)
+    public Storage storage() { return storage; }
+    public int index() { return gridIndex; }
 
-    /** 앵커 슬롯만 픽업 허용 */
-    @Override
-    public boolean mayPickup(Player player) {
-        return grid.isAnchor(gridIndex);
-    }
+    @Override public boolean mayPlace(ItemStack stack) { return true; }
 }
