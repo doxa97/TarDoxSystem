@@ -2,7 +2,7 @@ package fir.sec.tardoxinv.client.overlay;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import fir.sec.tardoxinv.client.ClientHotbarBindings;
-import fir.sec.tardoxinv.menu.slot.GridSlot;
+import fir.sec.tardoxinv.menu.GridSlot;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -36,7 +36,9 @@ public class InventoryOverlayRenderer {
                 Integer hb = ClientHotbarBindings.getNumberFor(gs);
                 if (hb != null) {
                     String t = String.valueOf(hb + 1); // 1~
-                    g.drawString(Minecraft.getInstance().font, t, x + 10 - Minecraft.getInstance().font.width(t), y + 1, 0xFFE6E6E6, true);
+                    g.drawString(Minecraft.getInstance().font, t,
+                            x + 10 - Minecraft.getInstance().font.width(t),
+                            y + 1, 0xFFE6E6E6, true);
                 }
             }
         }

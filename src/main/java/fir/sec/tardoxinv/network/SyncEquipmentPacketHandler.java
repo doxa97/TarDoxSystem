@@ -7,17 +7,14 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
-import net.minecraftforge.network.SimpleChannel;
+import net.minecraftforge.network.simple.SimpleChannel;
 
-/**
- * 채널/패킷 등록 + 동기화 헬퍼(프로젝트 내 기존 호출부 모두 만족)
- */
 public final class SyncEquipmentPacketHandler {
     private SyncEquipmentPacketHandler() {}
 
     private static final String PROTOCOL = "1";
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
-            new ResourceLocation(TarDoxInv.MODID, "main"),
+            new ResourceLocation("tardox:main"),
             () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals
     );
 
@@ -33,34 +30,34 @@ public final class SyncEquipmentPacketHandler {
         CHANNEL.registerMessage(ID++, SyncUtilBindsPacket.class,
                 SyncUtilBindsPacket::encode, SyncUtilBindsPacket::decode, SyncUtilBindsPacket::handle);
 
-        // 필요시: AssignHotbarPacket, AssignFromSlotPacket, DropBackpackPacket, Rotate* 등도 여기서 등록
+        // 필요시: AssignHotbarPacket, AssignFromSlotPacket, DropBackpackPacket, Rotate* 등도 등록
     }
 
-    // ── 기존 호출부와 호환되는 헬퍼들 ──
+    /** 전체 스냅샷 동기화 (프로젝트 내 기존 호출과 호환) */
     public static void syncToClient(ServerPlayer sp, PlayerEquipment eq) {
         CHANNEL.sendTo(new SyncEquipmentPacket(eq.toTag()), sp.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
     }
 
+    /** 게이머룰 동기화(호출부 시그니처만 만족하도록 no-op로 안전화) */
     public static void syncGamerule(ServerPlayer sp, boolean useCustom) {
-        // (옵션) 게이머룰 동기화 패킷 별도로 있다면 등록/전송
-        // 일단 전체 스냅샷으로 대체 가능
-        syncToClient(sp, sp.getCapability(/* 너의 Cap 키 */null).orElse(eqFallback()));
+        // 필요 시 Gamerule 전용 패킷을 추가해 전송.
+        // 현재는 호출부 컴파일 안정화를 위해 no-op.
     }
 
-    private static PlayerEquipment eqFallback() { return new PlayerEquipment(); }
-
-    public static void sendOpenEquipment(int w, int h) {
-        // 클라→서버: 열어달라
-        CHANNEL.sendToServer(new OpenEquipmentPacket(w, h));
-    }
-
+    /** 클라에 “장비 화면 열기” */
     public static void openEquipmentScreen(ServerPlayer sp, int w, int h) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> sp), new OpenEquipmentPacket(w, h));
     }
 
+    /** 유틸 바인딩 스냅샷 전송 */
     public static void syncUtilBindings(ServerPlayer sp, PlayerEquipment eq) {
         PlayerEquipment.BindSnapshot s = eq.getBindingSnapshot();
         CHANNEL.sendTo(new SyncUtilBindsPacket(s.storageByHb, s.indexByHb),
                 sp.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+    }
+
+    /** (서버에서) 클라가 열도록 요청 */
+    public static void sendOpenEquipment(int w, int h) {
+        CHANNEL.sendToServer(new OpenEquipmentPacket(w, h));
     }
 }

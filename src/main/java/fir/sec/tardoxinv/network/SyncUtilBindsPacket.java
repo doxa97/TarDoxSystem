@@ -8,7 +8,6 @@ import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
 
-/** 서버→클라: 유틸 바인딩 스냅샷 전달 */
 public class SyncUtilBindsPacket {
     private final byte[] storageByHb;
     private final int[]  indexByHb;

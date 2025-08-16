@@ -1,28 +1,30 @@
-package fir.sec.tardoxinv.inventory;
+package fir.sec.tardoxinv.capability;
 
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.ItemLike;
 import net.minecraftforge.items.IItemHandlerModifiable;
 import net.minecraftforge.items.ItemHandlerHelper;
+import net.minecraftforge.items.ItemStackHandler;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 간단한 2D 인벤토리 핸들러(Forge IItemHandlerModifiable).
- * - 폭x높이 셀(1x1 기준)로 동작하도록 최소 구현
+ * 간단한 2D 인벤토리 핸들러 (1칸 단위로 동작).
+ * - Forge ItemStackHandler 기반, IItemHandlerModifiable 구현
  * - serializeNBT/deserializeNBT 제공
- * - insertItem2D(...) 헬퍼 제공(2D 배치 프리뷰/검증 확장 가능)
+ * - insertItem2D: 2D 편의 삽입(동일 아이템 합치기 → 빈칸 채우기)
  */
-public class GridItemHandler2D implements IItemHandlerModifiable {
+public class GridItemHandler2D extends ItemStackHandler implements IItemHandlerModifiable {
+
     private int width;
     private int height;
     private final List<ItemStack> stacks;
 
     public GridItemHandler2D(int w, int h) {
+        super(0);
         this.width = Math.max(0, w);
         this.height = Math.max(0, h);
         this.stacks = new ArrayList<>(this.width * this.height);
@@ -34,7 +36,7 @@ public class GridItemHandler2D implements IItemHandlerModifiable {
     public int size() { return width * height; }
 
     public boolean isAnchor(int index) {
-        return index >= 0 && index < size(); // 간단 구현(멀티셀 아이템 미사용 시 anchor=자기칸)
+        return index >= 0 && index < size();
     }
 
     public boolean canPlaceAt(int index, ItemStack stack) {
@@ -43,9 +45,10 @@ public class GridItemHandler2D implements IItemHandlerModifiable {
         return cur.isEmpty() || (ItemStack.isSameItemSameTags(cur, stack) && cur.getCount() < cur.getMaxStackSize());
     }
 
-    /** 2D용 편의 insert (여기선 1칸 기준으로 동작) */
+    /** 2D 편의 삽입(동일 합치기 → 빈칸) */
     public ItemStack insertItem2D(ItemStack stack, boolean simulate) {
         if (stack.isEmpty() || size() == 0) return stack;
+
         // 1) 같은 아이템 합치기
         for (int i = 0; i < size(); i++) {
             ItemStack cur = stacks.get(i);
@@ -57,7 +60,8 @@ public class GridItemHandler2D implements IItemHandlerModifiable {
             stack.shrink(can);
             if (stack.isEmpty()) return ItemStack.EMPTY;
         }
-        // 2) 빈 칸 채움
+
+        // 2) 빈칸 채우기
         for (int i = 0; i < size(); i++) {
             if (!stacks.get(i).isEmpty()) continue;
             int to = Math.min(stack.getCount(), stack.getMaxStackSize());
@@ -68,7 +72,7 @@ public class GridItemHandler2D implements IItemHandlerModifiable {
         return stack;
     }
 
-    // ── IItemHandlerModifiable 구현 ──
+    // ── IItemHandlerModifiable / ItemStackHandler 구현 ──
     @Override public int getSlots() { return size(); }
 
     @Override
@@ -109,7 +113,7 @@ public class GridItemHandler2D implements IItemHandlerModifiable {
     @Override public boolean isItemValid(int slot, ItemStack stack) { return true; }
     @Override public void setStackInSlot(int slot, ItemStack stack) { if (slot>=0 && slot<size()) stacks.set(slot, stack); }
 
-    // ── NBT 직렬화 ──
+    // ── NBT ──
     public CompoundTag serializeNBT() {
         CompoundTag tag = new CompoundTag();
         tag.putInt("W", width);

@@ -1,6 +1,6 @@
 package fir.sec.tardoxinv.client;
 
-import fir.sec.tardoxinv.menu.slot.GridSlot;
+import fir.sec.tardoxinv.menu.GridSlot;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -28,7 +28,7 @@ public final class ClientHotbarBindings {
     /** 오버레이 숫자 조회 */
     public static Integer getNumberFor(GridSlot gs) {
         byte sc = (byte) (gs.getStorage() == GridSlot.Storage.BASE ? 1 : 2);
-        return SLOT_TO_HB.get(pack(sc, gs.getIndex()));
+        return SLOT_TO_HB.get(pack(sc, gs.getGridIndex()));
     }
 
     private static long pack(byte st, int idx) {

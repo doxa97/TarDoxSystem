@@ -1,7 +1,5 @@
 package fir.sec.tardoxinv.capability;
 
-import fir.sec.tardoxinv.inventory.GridItemHandler2D;
-import fir.sec.tardoxinv.menu.slot.GridSlot;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -15,8 +13,9 @@ import java.util.Map;
 
 /**
  * PlayerEquipment
- * - 장비슬롯/기본 2x2/배낭 2D/유틸 바인딩 스냅샷
- * - 기존 호출부(saveNBT/loadNBT/EQUIP_SLOTS/getEquipment/...) 만족
+ * - 장비슬롯(7), 기본 2x2, 배낭 2D
+ * - 유틸 바인딩(핫바→원본 슬롯 링크), 스냅샷 동기화
+ * - 기존 호출부(saveNBT/loadNBT/toTag/getBackpack2D/getEquipment/...) 모두 제공
  */
 public class PlayerEquipment {
 
@@ -25,7 +24,6 @@ public class PlayerEquipment {
     public static final int SLOT_HELMET = 4, SLOT_VEST = 5, SLOT_HEADSET = 6;
 
     public enum Storage { BASE, BACKPACK }
-
     public static record BindingRef(Storage storage, int index) {}
 
     private final ItemStackHandler equipment = new ItemStackHandler(EQUIP_SLOTS);
@@ -37,11 +35,9 @@ public class PlayerEquipment {
 
     private boolean dirty = false;
 
-    // 유틸 바인딩: hotbarIndex -> (storage,index)
     private final Map<Integer, BindingRef> utilBinds = new HashMap<>();
     private static final int MAX_HB = 64;
 
-    // ── 접근자 ──
     public ItemStackHandler getEquipment() { return equipment; }
     public GridItemHandler2D getBase2x2() { return base2x2; }
     public GridItemHandler2D getBackpack() { return backpack2D; }
@@ -50,14 +46,11 @@ public class PlayerEquipment {
     public int getBackpackWidth() { return backpackW; }
     public int getBackpackHeight() { return backpackH; }
 
-    // ── Dirty 플래그 ──
     public boolean isDirty() { return dirty; }
     public void clearDirty() { dirty = false; }
 
-    // 무기 슬롯→핫바 반영(간단 No-op; 필요 시 핫바 표시용 싱크 처리)
-    public void applyWeaponsToHotbar(ServerPlayer sp) { /* 구현 필요 시 확장 */ }
+    public void applyWeaponsToHotbar(ServerPlayer sp) { /* no-op */ }
 
-    // ── 배낭 장착/해제 ──
     public void setBackpackItem(ItemStack stack) {
         this.backpackItem = stack.copy();
         if (this.backpackItem.isEmpty()) {
@@ -66,18 +59,11 @@ public class PlayerEquipment {
             this.backpack2D = null;
             clearBindingsInsideBackpack();
         } else {
-            // NBT에서 Width/Height 읽기(없으면 0)
             CompoundTag tag = this.backpackItem.getTag();
             int w = (tag != null && tag.contains("Width")) ? tag.getInt("Width") : 0;
             int h = (tag != null && tag.contains("Height")) ? tag.getInt("Height") : 0;
             resizeBackpack(w, h);
         }
-        if (player instanceof ServerPlayer sp) {
-            fir.sec.tardoxinv.network.SyncEquipmentPacketHandler.openEquipmentScreen(sp, cap.getBackpackWidth(), cap.getBackpackHeight());
-            fir.sec.tardoxinv.network.SyncEquipmentPacketHandler.syncToClient(sp, cap);
-            sp.closeContainer();
-        }
-
         this.dirty = true;
     }
 
@@ -100,7 +86,6 @@ public class PlayerEquipment {
         }
     }
 
-    // ── 유틸 바인딩 API ──
     public void bindFromBase(ServerPlayer sp, int hotbar, int baseIndex) {
         removeDuplicates(Storage.BASE, baseIndex);
         utilBinds.put(hotbar, new BindingRef(Storage.BASE, baseIndex));
@@ -121,7 +106,6 @@ public class PlayerEquipment {
     }
 
     public void onSlotStackChanged(ServerPlayer sp, Storage storage, int index, ItemStack newStack) {
-        // 필요 시: 원본 소모/삭제에 따른 핫바 연동 로직 확장
         syncUtilityHotbar(sp);
     }
 
@@ -157,7 +141,6 @@ public class PlayerEquipment {
         SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
     }
 
-    // ── NBT 직렬화 ──
     public CompoundTag saveNBT() {
         CompoundTag tag = new CompoundTag();
         tag.put("Equip", equipment.serializeNBT());
@@ -167,7 +150,6 @@ public class PlayerEquipment {
         tag.putInt("BH", backpackH);
         if (backpack2D != null) tag.put("Backpack2D", backpack2D.serializeNBT());
 
-        // 유틸 바인딩 스냅샷
         BindSnapshot snap = getBindingSnapshot();
         tag.putByteArray("BindST", snap.storageByHb);
         int[] idx = snap.indexByHb;
@@ -203,6 +185,5 @@ public class PlayerEquipment {
         }
     }
 
-    // 기존 코드와 호환 위해 제공
     public CompoundTag toTag() { return saveNBT(); }
 }
