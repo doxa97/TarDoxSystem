@@ -3,135 +3,176 @@ package fir.sec.tardoxinv.capability;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
+import net.minecraft.core.NonNullList;
 
-/**
- * 2D 그리드 인벤토리. 아이템 NBT의 Width/Height를 읽어 앵커 슬롯(좌상단) 기준으로
- * w×h 영역을 점유한다. 앵커 슬롯에만 실스택을 저장하며, 나머지 칸은 빈칸처럼 보이게 한다.
- */
 public class GridItemHandler2D extends ItemStackHandler {
-    private int gridW, gridH;
-    // 각 칸이 어느 앵커(slot index)를 따르는지 기록(-1이면 비어있음)
-    private int[] anchorOf;
+    private final int width;
+    private final int height;
+    private int[] cover; // -1=empty, anchorIndex otherwise
 
-    public GridItemHandler2D(int w, int h) {
-        super(Math.max(0, w*h));
-        setGridSize(w, h);
+    public GridItemHandler2D(int width, int height) {
+        super(Math.max(0, width * height));
+        this.width = Math.max(0, width);
+        this.height = Math.max(0, height);
+        this.stacks = NonNullList.withSize(getSlots(), ItemStack.EMPTY);
+        this.cover = new int[getSlots()];
+        java.util.Arrays.fill(this.cover, -1);
     }
 
-    public void setGridSize(int w, int h) {
-        this.gridW = Math.max(0, w);
-        this.gridH = Math.max(0, h);
-        int size = gridW * gridH;
-        if (size != this.stacks.size()) {
-            // ItemStackHandler.stacks 는 NonNullList 여야 한다
-            this.stacks = net.minecraft.core.NonNullList.withSize(size, ItemStack.EMPTY);
-        }
-        this.anchorOf = new int[size];
-        java.util.Arrays.fill(this.anchorOf, -1);
-        rebuildAnchors();
-        onLoad();
+    public int getGridWidth() { return width; }
+    public int getGridHeight() { return height; }
+
+    private int idx(int x, int y) { return y * width + x; }
+    private int ix(int index) { return index % width; }
+    private int iy(int index) { return index / width; }
+
+    private static int wOf(ItemStack s) { return s.hasTag() ? Math.max(1, s.getTag().getInt("Width")) : 1; }
+    private static int hOf(ItemStack s) { return s.hasTag() ? Math.max(1, s.getTag().getInt("Height")) : 1; }
+
+    /** 공개: 오버레이/슬롯에서 앵커 여부를 확인 */
+    public boolean isAnchor(int index) {
+        return index >= 0 && index < getSlots() && cover[index] == index && !stacks.get(index).isEmpty();
     }
 
-    public int getGridW(){ return gridW; }
-    public int getGridH(){ return gridH; }
-
-    public int xyToIndex(int x, int y){ return x + y * gridW; }
-    public int idxX(int idx){ return idx % gridW; }
-    public int idxY(int idx){ return idx / gridW; }
-
-    // ---- 배치 가능성 ----
-    public static int getItemW(ItemStack st){
-        return st.hasTag() ? Math.max(1, st.getTag().getInt("Width")) : 1;
-    }
-    public static int getItemH(ItemStack st){
-        return st.hasTag() ? Math.max(1, st.getTag().getInt("Height")) : 1;
-    }
-
-    public boolean canPlaceAt(int anchorIdx, ItemStack stack){
-        if (stack.isEmpty()) return true;
-        int w = getItemW(stack), h = getItemH(stack);
-        int ax = idxX(anchorIdx), ay = idxY(anchorIdx);
-        if (ax + w > gridW || ay + h > gridH) return false;
-
-        for (int dx=0; dx<w; dx++){
-            for (int dy=0; dy<h; dy++){
-                int idx = xyToIndex(ax+dx, ay+dy);
-                int a = anchorOf[idx];
-                // 다른 앵커가 점유 중이면 불가 (자기 앵커는 허용)
-                if (a != -1 && a != anchorIdx) return false;
+    private boolean fitsRectAt(int anchorIndex, int w, int h) {
+        if (w <= 0 || h <= 0) return false;
+        int ax = ix(anchorIndex), ay = iy(anchorIndex);
+        if (ax + w > width || ay + h > height) return false;
+        for (int dx = 0; dx < w; dx++) {
+            for (int dy = 0; dy < h; dy++) {
+                int i = idx(ax + dx, ay + dy);
+                if (cover[i] != -1) return false;
+                if (!stacks.get(i).isEmpty()) return false;
             }
         }
         return true;
     }
 
-    // ---- 점유/해제 ----
-    private void occupy(int anchorIdx, ItemStack stack){
-        int w = getItemW(stack), h = getItemH(stack);
-        int ax = idxX(anchorIdx), ay = idxY(anchorIdx);
-        for (int dx=0; dx<w; dx++){
-            for (int dy=0; dy<h; dy++){
-                int idx = xyToIndex(ax+dx, ay+dy);
-                anchorOf[idx] = anchorIdx;
-                if (idx != anchorIdx) super.setStackInSlot(idx, ItemStack.EMPTY);
-            }
-        }
-    }
-
-    private void clearRegionOfAnchor(int anchorIdx){
-        for (int i=0;i<anchorOf.length;i++){
-            if (anchorOf[i] == anchorIdx) anchorOf[i] = -1;
-        }
-        super.setStackInSlot(anchorIdx, ItemStack.EMPTY);
-    }
-
-    private void rebuildAnchors(){
-        java.util.Arrays.fill(anchorOf, -1);
-        for (int i=0;i<stacks.size();i++){
-            ItemStack s = stacks.get(i);
-            if (!s.isEmpty()){
-                if (canPlaceAt(i, s)) occupy(i, s);
-                else super.setStackInSlot(i, ItemStack.EMPTY);
-            }
-        }
-    }
-
-    /** 자동 배치: 반드시 '앵커 슬롯이 비어있는 곳'에만 넣는다(기존 아이템 덮어쓰기 방지) */
-    public boolean insertGrid(ItemStack stack){
+    /** 공개: 특정 아이템을 해당 앵커 자리에 둘 수 있는지(격자 미리보기/슬롯 검증용) */
+    public boolean canPlaceAt(int anchorIndex, ItemStack stack) {
         if (stack.isEmpty()) return false;
-        for (int i=0;i<getSlots();i++){
-            if (!getStackInSlot(i).isEmpty()) continue; // 앵커가 비어있는 곳만
-            if (canPlaceAt(i, stack)){
-                setStackInSlot(i, stack.copy());
-                return true;
+        return fitsRectAt(anchorIndex, wOf(stack), hOf(stack));
+    }
+
+    private void markArea(int anchorIndex, int w, int h, boolean occupy) {
+        int ax = ix(anchorIndex), ay = iy(anchorIndex);
+        for (int dx = 0; dx < w; dx++) {
+            for (int dy = 0; dy < h; dy++) {
+                int i = idx(ax + dx, ay + dy);
+                cover[i] = occupy ? anchorIndex : -1;
+                if (i != anchorIndex && occupy) {
+                    if (!stacks.get(i).isEmpty()) stacks.set(i, ItemStack.EMPTY);
+                }
+            }
+        }
+    }
+
+    public ItemStack extractCluster(int anyIndex) {
+        if (anyIndex < 0 || anyIndex >= getSlots()) return ItemStack.EMPTY;
+        int anchor = (cover[anyIndex] == -1) ? anyIndex : cover[anyIndex];
+        if (!isAnchor(anchor)) return ItemStack.EMPTY;
+        ItemStack s = stacks.get(anchor).copy();
+        int w = wOf(s), h = hOf(s);
+        stacks.set(anchor, ItemStack.EMPTY);
+        markArea(anchor, w, h, false);
+        onContentsChanged(anchor);
+        return s;
+    }
+
+    public boolean tryPlaceAt(int anchorIndex, ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        int w = wOf(stack), h = hOf(stack);
+        if (!fitsRectAt(anchorIndex, w, h)) return false;
+        stacks.set(anchorIndex, stack.copy());
+        markArea(anchorIndex, w, h, true);
+        cover[anchorIndex] = anchorIndex;
+        onContentsChanged(anchorIndex);
+        return true;
+    }
+
+    public boolean tryPlaceFirstFit(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        int w = wOf(stack), h = hOf(stack);
+        for (int i = 0; i < getSlots(); i++) {
+            if (fitsRectAt(i, w, h)) {
+                return tryPlaceAt(i, stack);
             }
         }
         return false;
     }
 
-    /** 앵커 슬롯에만 실스택을 노출 */
     @Override
-    public ItemStack getStackInSlot(int slot){
-        if (anchorOf[slot] == slot) return super.getStackInSlot(slot);
+    public boolean isItemValid(int slot, ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        if (cover[slot] != -1 && cover[slot] != slot) return false;
+        return canPlaceAt(slot, stack);
+    }
+
+    @Override
+    public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
+        if (stack.isEmpty()) return ItemStack.EMPTY;
+        if (!isItemValid(slot, stack)) return stack;
+        if (simulate) return ItemStack.EMPTY;
+        tryPlaceAt(slot, stack);
         return ItemStack.EMPTY;
     }
 
-    /** 수동 배치: canPlaceAt 만족 시 기존 앵커면 먼저 해제 후 점유 */
     @Override
-    public void setStackInSlot(int slot, ItemStack stack){
-        if (stack.isEmpty()){
-            if (isAnchor(slot)) clearRegionOfAnchor(slot);
+    public ItemStack extractItem(int slot, int amount, boolean simulate) {
+        if (cover[slot] != -1 && cover[slot] != slot) return ItemStack.EMPTY;
+        if (!isAnchor(slot)) return ItemStack.EMPTY;
+        if (simulate) return stacks.get(slot).copy();
+        return extractCluster(slot);
+    }
+
+    @Override
+    public ItemStack getStackInSlot(int slot) {
+        if (cover[slot] != -1 && cover[slot] != slot) return ItemStack.EMPTY;
+        return super.getStackInSlot(slot);
+    }
+
+    @Override
+    public void setStackInSlot(int slot, ItemStack stack) {
+        if (cover[slot] != -1 && cover[slot] != slot) return;
+        if (isAnchor(slot)) {
+            ItemStack cur = stacks.get(slot);
+            int w = wOf(cur), h = hOf(cur);
+            markArea(slot, w, h, false);
+        }
+        if (stack.isEmpty()) {
+            stacks.set(slot, ItemStack.EMPTY);
+            cover[slot] = -1;
+            onContentsChanged(slot);
             return;
         }
-        if (!canPlaceAt(slot, stack)) return;
-        if (isAnchor(slot)) clearRegionOfAnchor(slot);
-        super.setStackInSlot(slot, stack);
-        occupy(slot, stack);
+        int w = wOf(stack), h = hOf(stack);
+        if (!fitsRectAt(slot, w, h)) return;
+        stacks.set(slot, stack.copy());
+        markArea(slot, w, h, true);
+        cover[slot] = slot;
         onContentsChanged(slot);
     }
 
-    public boolean isAnchor(int idx){ return idx >=0 && idx < anchorOf.length && anchorOf[idx] == idx && !super.getStackInSlot(idx).isEmpty(); }
-    public boolean isOccupied(int idx){ return idx >=0 && idx < anchorOf.length && anchorOf[idx] != -1; }
+    @Override
+    public CompoundTag serializeNBT() {
+        CompoundTag tag = super.serializeNBT();
+        tag.putInt("GW", width);
+        tag.putInt("GH", height);
+        return tag;
+    }
 
-    @Override public CompoundTag serializeNBT(){ return super.serializeNBT(); }
-    @Override public void deserializeNBT(CompoundTag nbt){ super.deserializeNBT(nbt); rebuildAnchors(); onLoad(); }
+    @Override
+    public void deserializeNBT(CompoundTag nbt) {
+        super.deserializeNBT(nbt);
+        this.cover = new int[getSlots()];
+        java.util.Arrays.fill(this.cover, -1);
+        for (int i = 0; i < getSlots(); i++) {
+            ItemStack s = stacks.get(i);
+            if (!s.isEmpty()) {
+                int w = wOf(s), h = hOf(s);
+                cover[i] = i;
+                markArea(i, w, h, true);
+            }
+        }
+    }
 }

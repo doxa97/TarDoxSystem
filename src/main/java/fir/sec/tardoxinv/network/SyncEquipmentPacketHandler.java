@@ -11,15 +11,13 @@ import net.minecraftforge.network.simple.SimpleChannel;
 
 public class SyncEquipmentPacketHandler {
 
-    private static final String PROTOCOL_VERSION = "2"; // 패킷 테이블 변경 시 버전업
+    private static final String PROTOCOL_VERSION = "1";
     public static SimpleChannel CHANNEL;
 
     public static void register() {
         CHANNEL = NetworkRegistry.newSimpleChannel(
                 ResourceLocation.fromNamespaceAndPath(TarDoxInv.MODID, "sync_equipment"),
-                () -> PROTOCOL_VERSION,
-                PROTOCOL_VERSION::equals,
-                PROTOCOL_VERSION::equals
+                () -> PROTOCOL_VERSION, PROTOCOL_VERSION::equals, PROTOCOL_VERSION::equals
         );
 
         int id = 0;
@@ -31,11 +29,8 @@ public class SyncEquipmentPacketHandler {
         CHANNEL.registerMessage(id++, SyncGamerulePacket.class,   SyncGamerulePacket::encode,   SyncGamerulePacket::decode,   SyncGamerulePacket::handle);
         CHANNEL.registerMessage(id++, DropBackpackPacket.class,   DropBackpackPacket::encode,   DropBackpackPacket::decode,   DropBackpackPacket::handle);
         CHANNEL.registerMessage(id++, RotateSlotPacket.class,     RotateSlotPacket::encode,     RotateSlotPacket::decode,     RotateSlotPacket::handle);
-    }
-
-    /** 기존 호출 지점 호환용: 지금은 동기화할 추가 페이로드가 없으므로 no-op */
-    public static void syncUtilBindings(ServerPlayer player, PlayerEquipment equipment) {
-        // 필요 시 여기에 전용 패킷 추가
+        // ★ 신규
+        CHANNEL.registerMessage(id++, SyncUtilBindsPacket.class,  SyncUtilBindsPacket::encode,  SyncUtilBindsPacket::decode,  SyncUtilBindsPacket::handle);
     }
 
     public static void syncToClient(ServerPlayer player, PlayerEquipment equipment) {
@@ -44,26 +39,10 @@ public class SyncEquipmentPacketHandler {
 
     public static void syncBackpackToClient(ServerPlayer player, PlayerEquipment equipment) {
         CompoundTag data = new CompoundTag();
-
-        // Backpack(그리드) + BackpackItem
         CompoundTag bp = new CompoundTag();
         bp.putInt("Width",  equipment.getBackpackWidth());
         bp.putInt("Height", equipment.getBackpackHeight());
-
-        // 2D/1D 구현 호환: 리플렉션으로 우선 getBackpack2D, 실패 시 getBackpack (둘 다 없으면 빈 태그)
-        net.minecraft.nbt.CompoundTag itemsNbt = new net.minecraft.nbt.CompoundTag();
-        try {
-            var m2d = equipment.getClass().getMethod("getBackpack2D");
-            var h2d = (net.minecraftforge.items.ItemStackHandler) m2d.invoke(equipment);
-            itemsNbt = h2d.serializeNBT();
-        } catch (Exception ignore) {
-            try {
-                var m1d = equipment.getClass().getMethod("getBackpack");
-                var h1d = (net.minecraftforge.items.ItemStackHandler) m1d.invoke(equipment);
-                itemsNbt = h1d.serializeNBT();
-            } catch (Exception ignored) { }
-        }
-        bp.put("Items", itemsNbt);
+        bp.put("Items", equipment.getBackpack().serializeNBT());
         data.put("Backpack", bp);
 
         if (!equipment.getBackpackItem().isEmpty()) {
@@ -81,5 +60,23 @@ public class SyncEquipmentPacketHandler {
 
     public static void syncGamerule(ServerPlayer player, boolean useCustom) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncGamerulePacket(useCustom));
+    }
+
+    /** ★ 유틸 바인딩 동기화 */
+    public static void syncUtilBindings(ServerPlayer sp, PlayerEquipment cap) {
+        byte[] storage = new byte[5];
+        int[] index = new int[5];
+        for (int i = 0; i < 5; i++) {
+            int hb = 4 + i;
+            PlayerEquipment.UtilBinding b = cap.peekBinding(hb);
+            if (b == null) {
+                storage[i] = -1;
+                index[i] = -1;
+            } else {
+                storage[i] = (byte)(b.storage == PlayerEquipment.Storage.BASE ? 0 : 1);
+                index[i] = b.index;
+            }
+        }
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> sp), new SyncUtilBindsPacket(storage, index));
     }
 }

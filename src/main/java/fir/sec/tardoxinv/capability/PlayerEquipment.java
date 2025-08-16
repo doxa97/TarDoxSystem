@@ -3,9 +3,7 @@ package fir.sec.tardoxinv.capability;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
-import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
@@ -22,6 +20,19 @@ public class PlayerEquipment {
     public static final int SLOT_SEC     = 5;
     public static final int SLOT_MELEE   = 6;
     public static final int EQUIP_SLOTS  = 7;
+
+    /** 유틸 바인딩에서 어떤 저장소/인덱스를 가리키는지 표기 */
+    public enum Storage { BASE, BACKPACK }
+
+    /** 유틸 바인딩 정보(핫바 ↔ 저장소 위치) */
+    public static class UtilBinding {
+        public final Storage storage;
+        public final int index; // BASE: 0..3, BACKPACK: 0..(w*h-1)
+        public UtilBinding(Storage storage, int index) {
+            this.storage = storage;
+            this.index = index;
+        }
+    }
 
     private final ItemStackHandler equipment = new ItemStackHandler(EQUIP_SLOTS) {
         @Override protected void onContentsChanged(int slot) {
@@ -51,14 +62,16 @@ public class PlayerEquipment {
             ItemStack a = getStackInSlot(SLOT_PRIM1);
             ItemStack b = getStackInSlot(SLOT_PRIM2);
             if (a.isEmpty() || b.isEmpty()) return;
-            var la = LinkIdUtil.getLinkId(a);
-            var lb = LinkIdUtil.getLinkId(b);
+            UUID la = LinkIdUtil.getLinkId(a), lb = LinkIdUtil.getLinkId(b);
             if (la != null && la.equals(lb)) setStackInSlot(changedSlot, ItemStack.EMPTY);
         }
     };
 
-    // ★ 2D 그리드 인벤토리로 교체
-    private GridItemHandler2D base2x2  = new GridItemHandler2D(2, 2);
+    private final ItemStackHandler base2x2 = new ItemStackHandler(4) {
+        @Override protected void onContentsChanged(int slot) { dirty = true; }
+    };
+
+    /** 배낭: 2D 그리드 */
     private GridItemHandler2D backpack = new GridItemHandler2D(0, 0);
     private int backpackWidth  = 0;
     private int backpackHeight = 0;
@@ -67,9 +80,12 @@ public class PlayerEquipment {
     private boolean dirty = false;
 
     public ItemStackHandler getEquipment() { return equipment; }
-    public GridItemHandler2D getBase2x2()  { return base2x2; }
-    public GridItemHandler2D getBackpack2D() { return backpack; } // 주: 기존 getBackpack()을 사용하는 코드가 있으면 이 메서드로 교체
-    public int getBackpackWidth()  { return backpackWidth; }
+    public ItemStackHandler getBase2x2() { return base2x2; }
+    /** 호환용: 기존 코드가 getBackpack()을 사용하므로 유지 */
+    public ItemStackHandler getBackpack() { return backpack; }
+    public GridItemHandler2D getBackpack2D() { return backpack; }
+
+    public int getBackpackWidth() { return backpackWidth; }
     public int getBackpackHeight() { return backpackHeight; }
     public ItemStack getBackpackItem() { return backpackItem; }
 
@@ -105,7 +121,9 @@ public class PlayerEquipment {
     public void resizeBackpack(int w, int h) {
         backpackWidth = w;
         backpackHeight = h;
-        backpack.setGridSize(w,h);
+        backpack = new GridItemHandler2D(w, h) {
+            @Override protected void onContentsChanged(int slot) { dirty = true; }
+        };
         dirty = true;
     }
 
@@ -132,16 +150,16 @@ public class PlayerEquipment {
         bp.put("Items", backpack.serializeNBT());
         tag.put("Backpack", bp);
         if (!backpackItem.isEmpty()) tag.put("BackpackItem", backpackItem.save(new CompoundTag()));
-
-        // 바인딩 저장
-        ListTag binds = new ListTag();
-        for (Map.Entry<Integer, UtilBinding> e : utilBindByHotbar.entrySet()) {
-            CompoundTag b = new CompoundTag();
-            b.putInt("Hotbar", e.getKey());
-            b.putString("Storage", e.getValue().storage == Storage.BASE ? "base" : "backpack");
-            b.putInt("Index", e.getValue().index);
-            if (e.getValue().id != null) b.putUUID("Id", e.getValue().id);
-            binds.add(b);
+        // 유틸 바인딩 저장
+        CompoundTag binds = new CompoundTag();
+        for (int hb = 4; hb <= 8; hb++) {
+            UtilBinding b = utilBindings.get(hb);
+            if (b != null) {
+                CompoundTag t = new CompoundTag();
+                t.putString("storage", b.storage == Storage.BASE ? "base" : "backpack");
+                t.putInt("index", b.index);
+                binds.put(String.valueOf(hb), t);
+            }
         }
         tag.put("UtilBinds", binds);
         return tag;
@@ -150,7 +168,6 @@ public class PlayerEquipment {
     public void loadNBT(CompoundTag tag) {
         equipment.deserializeNBT(tag.getCompound("Equipment"));
         base2x2.deserializeNBT(tag.getCompound("Base2x2"));
-
         if (tag.contains("Backpack")) {
             CompoundTag bp = tag.getCompound("Backpack");
             int w = bp.getInt("Width");
@@ -163,191 +180,85 @@ public class PlayerEquipment {
         if (tag.contains("BackpackItem")) backpackItem = ItemStack.of(tag.getCompound("BackpackItem"));
         else backpackItem = ItemStack.EMPTY;
 
+        utilBindings.clear();
+        if (tag.contains("UtilBinds")) {
+            CompoundTag binds = tag.getCompound("UtilBinds");
+            for (int hb = 4; hb <= 8; hb++) {
+                String k = String.valueOf(hb);
+                if (binds.contains(k)) {
+                    CompoundTag t = binds.getCompound(k);
+                    String s = t.getString("storage");
+                    int idx = t.getInt("index");
+                    Storage st = "base".equals(s) ? Storage.BASE : Storage.BACKPACK;
+                    utilBindings.put(hb, new UtilBinding(st, idx));
+                }
+            }
+        }
+
         for (int i = 0; i < EQUIP_SLOTS; i++) {
             ItemStack s = equipment.getStackInSlot(i);
             if (!s.isEmpty()) LinkIdUtil.ensureLinkId(s);
         }
         dirty = false;
-
-        utilBindByHotbar.clear();
-        lastCountByHotbar.clear();
-        if (tag.contains("UtilBinds", Tag.TAG_LIST)) {
-            ListTag binds = tag.getList("UtilBinds", Tag.TAG_COMPOUND);
-            for (Tag t : binds) {
-                CompoundTag b = (CompoundTag) t;
-                int hb = b.getInt("Hotbar");
-                String st = b.getString("Storage");
-                int idx = b.getInt("Index");
-                java.util.UUID id = b.contains("Id") ? b.getUUID("Id") : null;
-                Storage storage = "base".equals(st) ? Storage.BASE : Storage.BACKPACK;
-                utilBindByHotbar.put(hb, new UtilBinding(storage, idx, id));
-            }
-        }
     }
 
     public static void ensureLink(ItemStack stack) { if (!stack.isEmpty()) LinkIdUtil.ensureLinkId(stack); }
     public boolean isDirty() { return dirty; }
     public void clearDirty() { dirty = false; }
 
-    // ---------- 유틸 바인딩 ----------
-    public enum Storage { BASE, BACKPACK }
-    public static class UtilBinding {
-        public final Storage storage;
-        public final int index;
-        public final java.util.UUID id;
-        public UtilBinding(Storage s, int idx, java.util.UUID id) { this.storage = s; this.index = idx; this.id = id; }
+    // ─────────────────────────────────────
+    // 유틸 바인딩 (핫바 5~9 → 4..8 인덱스)
+    // ─────────────────────────────────────
+    private final Map<Integer, UtilBinding> utilBindings = new HashMap<>();
+    private final Map<UUID, Integer> utilHotbarCount = new HashMap<>();
+    private final Map<Integer, UUID> utilHotbarSlotId = new HashMap<>();
+
+    /** 서버: BASE에서 바인딩 */
+    public void bindFromBase(ServerPlayer sp, int hotbarIdx, int baseIndex) {
+        utilBindings.put(hotbarIdx, new UtilBinding(Storage.BASE, baseIndex));
+        utilHotbarSlotId.remove(hotbarIdx); // 수량 연동은 별개(원한다면 유지 가능)
+        dirty = true;
+        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
     }
 
-    private final Map<Integer, UtilBinding> utilBindByHotbar = new HashMap<>();
-    private final Map<Integer, Integer>     lastCountByHotbar = new HashMap<>();
+    /** 서버: BACKPACK에서 바인딩 */
+    public void bindFromBackpack(ServerPlayer sp, int hotbarIdx, int bpIndex) {
+        utilBindings.put(hotbarIdx, new UtilBinding(Storage.BACKPACK, bpIndex));
+        utilHotbarSlotId.remove(hotbarIdx);
+        dirty = true;
+        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
+    }
 
+    /** 서버: 전체 바인딩 초기화(배낭 드롭 시) */
+    public void clearAllUtilBindings() {
+        utilBindings.clear();
+        utilHotbarSlotId.clear();
+        utilHotbarCount.clear();
+        dirty = true;
+    }
+    /** 기존 코드 호환용 이름 */
+    public void clearAllUtilityBindings() { clearAllUtilBindings(); }
+
+    /** 클라이언트: Overlay/툴팁 동기화용 조회 */
+    public UtilBinding peekBinding(int hotbarIdx) {
+        return utilBindings.get(hotbarIdx);
+    }
+
+    /** 클라이언트: 서버 동기화 적용 */
     public void clientSetBinding(int hotbarIdx, Storage storage, int index) {
-        if (storage == null) utilBindByHotbar.remove(hotbarIdx);
-        else utilBindByHotbar.put(hotbarIdx, new UtilBinding(storage, index, null));
-    }
-    public UtilBinding peekBinding(int hotbarIdx) { return utilBindByHotbar.get(hotbarIdx); }
-
-    private void bindInternal(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, UtilBinding b) {
-        java.util.List<Integer> toClear = new java.util.ArrayList<>();
-        for (Map.Entry<Integer, UtilBinding> e : utilBindByHotbar.entrySet()) {
-            int otherIdx = e.getKey();
-            if (otherIdx == hotbarIdx) continue;
-            UtilBinding ob = e.getValue();
-            boolean sameId = (b.id != null && ob.id != null && b.id.equals(ob.id));
-            boolean sameSource = (ob.storage == b.storage && ob.index == b.index);
-            if (sameId || sameSource) toClear.add(otherIdx);
+        if (storage == null) {
+            utilBindings.remove(hotbarIdx);
+        } else {
+            utilBindings.put(hotbarIdx, new UtilBinding(storage, index));
         }
-        for (int idx : toClear) unbind(sp, idx);
-        if (utilBindByHotbar.containsKey(hotbarIdx)) unbind(sp, hotbarIdx);
-
-        utilBindByHotbar.put(hotbarIdx, b);
-        lastCountByHotbar.put(hotbarIdx, 0);
-        mirrorOne(sp, hotbarIdx);
-        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
     }
 
-    public void bindFromBase(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, int baseIndex) {
-        ItemStack src = base2x2.getStackInSlot(baseIndex);
-        if (src.isEmpty() || !src.hasTag() || !"utility".equals(src.getTag().getString("slot_type"))) return;
-        LinkIdUtil.ensureLinkId(src);
-        base2x2.setStackInSlot(baseIndex, src);
-        bindInternal(sp, hotbarIdx, new UtilBinding(Storage.BASE, baseIndex, LinkIdUtil.getLinkId(src)));
-    }
-
-    public void bindFromBackpack(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx, int bpIndex) {
-        ItemStack src = backpack.getStackInSlot(bpIndex);
-        if (src.isEmpty() || !src.hasTag() || !"utility".equals(src.getTag().getString("slot_type"))) return;
-        LinkIdUtil.ensureLinkId(src);
-        backpack.setStackInSlot(bpIndex, src);
-        bindInternal(sp, hotbarIdx, new UtilBinding(Storage.BACKPACK, bpIndex, LinkIdUtil.getLinkId(src)));
-    }
-
-    public void unbind(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx) {
-        utilBindByHotbar.remove(hotbarIdx);
-        lastCountByHotbar.remove(hotbarIdx);
-        sp.getInventory().setItem(hotbarIdx, ItemStack.EMPTY);
-        forceHotbarSlot(sp, hotbarIdx);
-        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
-    }
-
-    public void clearAllUtilityBindings(){
-        utilBindByHotbar.clear();
-        lastCountByHotbar.clear();
-    }
-
-    public void tickMirrorUtilityHotbar(net.minecraft.server.level.ServerPlayer sp) {
-        for (int i = 4; i <= 8; i++) mirrorOne(sp, i);
-    }
-
-    private void mirrorOne(net.minecraft.server.level.ServerPlayer sp, int i) {
-        UtilBinding b = utilBindByHotbar.get(i);
-        if (b == null) return;
-
-        ItemStack src = switch (b.storage) {
-            case BASE -> base2x2.getStackInSlot(b.index);
-            case BACKPACK -> backpack.getStackInSlot(b.index);
-        };
-
-        if (src.isEmpty() || !src.hasTag() || !"utility".equals(src.getTag().getString("slot_type"))) { unbind(sp, i); return; }
-        java.util.UUID srcId = LinkIdUtil.getLinkId(src);
-        if (b.id != null && (srcId == null || !b.id.equals(srcId))) { unbind(sp, i); return; }
-
-        ItemStack hb  = sp.getInventory().getItem(i);
-        int hbCount   = hb.isEmpty() ? 0 : hb.getCount();
-        int prev      = lastCountByHotbar.getOrDefault(i, hbCount);
-
-        if (hbCount < prev) {
-            int used = prev - hbCount;
-            if (used > 0) {
-                ItemStack s = src.copy();
-                s.shrink(used);
-                // 앵커에 반영(0이 되면 영역 해제)
-                if (s.isEmpty()) setSource(b, ItemStack.EMPTY);
-                else setSource(b, s);
-                src = s;
-            }
-        }
-
-        if (src.isEmpty()) { unbind(sp, i); return; }
-
-        ItemStack mirror = src.copy();
-        sp.getInventory().setItem(i, mirror);
-        forceHotbarSlot(sp, i);
-        lastCountByHotbar.put(i, mirror.getCount());
-    }
-
-    private void setSource(UtilBinding b, ItemStack newStack) {
-        if (b.storage == Storage.BASE) base2x2.setStackInSlot(b.index, newStack);
-        else                           backpack.setStackInSlot(b.index, newStack);
+    /** 기존 수량동기 기록(유지, 필요시 사용) */
+    public void recordUtilityAssignment(ServerPlayer sp, int hotbarIdx, UUID id) {
+        utilHotbarSlotId.entrySet().removeIf(e -> e.getValue().equals(id));
+        utilHotbarSlotId.put(hotbarIdx, id);
+        ItemStack hb = sp.getInventory().getItem(hotbarIdx);
+        utilHotbarCount.put(id, hb.getCount());
         dirty = true;
-    }
-
-    public static void forceHotbarSlot(net.minecraft.server.level.ServerPlayer sp, int hotbarIdx0to8) {
-        ItemStack stack = sp.getInventory().getItem(hotbarIdx0to8).copy();
-        sp.connection.send(new ClientboundContainerSetSlotPacket(
-                sp.inventoryMenu.containerId,
-                sp.inventoryMenu.incrementStateId(),
-                36 + hotbarIdx0to8,
-                stack
-        ));
-    }
-
-    // --- 유틸 소비 보조: link_id 기준 저장소 소모 및 집계 (앵커만 순회) ---
-    public void consumeFromStorageByLink(java.util.UUID id, int delta) {
-        if (delta <= 0) return;
-        delta = consumeInHandler(base2x2, id, delta);
-        delta = consumeInHandler(backpack, id, delta);
-        dirty = true;
-    }
-
-    private static int consumeInHandler(GridItemHandler2D h, java.util.UUID id, int delta){
-        for (int s = 0; s < h.getSlots() && delta > 0; s++) {
-            ItemStack it = h.getStackInSlot(s);
-            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
-                    && id.equals(it.getTag().getUUID("link_id"))) {
-                int take = Math.min(delta, it.getCount());
-                ItemStack after = it.copy();
-                after.shrink(take);
-                h.setStackInSlot(s, after.isEmpty() ? ItemStack.EMPTY : after);
-                delta -= take;
-            }
-        }
-        return delta;
-    }
-
-    public int countInStorageByLink(java.util.UUID id) {
-        return countInHandler(base2x2, id) + countInHandler(backpack, id);
-    }
-
-    private static int countInHandler(GridItemHandler2D h, java.util.UUID id){
-        int total = 0;
-        for (int s = 0; s < h.getSlots(); s++) {
-            ItemStack it = h.getStackInSlot(s);
-            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")
-                    && id.equals(it.getTag().getUUID("link_id"))) {
-                total += it.getCount();
-            }
-        }
-        return total;
     }
 }
