@@ -2,40 +2,78 @@ package fir.sec.tardoxinv.network;
 
 import fir.sec.tardoxinv.TarDoxInv;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 
-public class SyncEquipmentPacketHandler {
+/**
+ * 네트워크 채널 및 동기화 헬퍼.
+ * - 누락되었던 syncToClient(...), sendOpenEquipment(...), syncGamerule(...), syncUtilBindings(...) 제공
+ * - 패킷 등록 포함
+ */
+public final class SyncEquipmentPacketHandler {
 
-    public static final String PROTOCOL = "1";
+    private static final String PROTOCOL = "1";
+
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(TarDoxInv.MODID, "main"),
-            () -> PROTOCOL, PROTOCOL::equals, PROTOCOL::equals
+            () -> PROTOCOL,
+            PROTOCOL::equals,
+            PROTOCOL::equals
     );
 
-    private static int id = 0;
+    private static boolean registered = false;
 
+    /** 모드 초기화 시 1회 호출 */
     public static void register() {
-        CHANNEL.registerMessage(id++, SyncUtilBindsPacket.class, SyncUtilBindsPacket::encode, SyncUtilBindsPacket::decode, SyncUtilBindsPacket::handle);
-        // 회전 패킷을 쓰는 경우(크래시 리포트 대비) 여기서 반드시 등록
-        CHANNEL.registerMessage(id++, RotateSlotPacket.class, RotateSlotPacket::encode, RotateSlotPacket::decode, RotateSlotPacket::handle);
-        // (필요시) 메뉴 새로고침 패킷 등 추가 등록 가능
+        if (registered) return;
+        int id = 0;
+
+        CHANNEL.registerMessage(id++, SyncEquipmentPacket.class,   SyncEquipmentPacket::encode,   SyncEquipmentPacket::decode,   SyncEquipmentPacket::handle);
+        CHANNEL.registerMessage(id++, OpenEquipmentPacket.class,   OpenEquipmentPacket::encode,   OpenEquipmentPacket::decode,   OpenEquipmentPacket::handle);
+        CHANNEL.registerMessage(id++, DropBackpackPacket.class,    DropBackpackPacket::encode,    DropBackpackPacket::decode,    DropBackpackPacket::handle);
+        CHANNEL.registerMessage(id++, AssignHotbarPacket.class,    AssignHotbarPacket::encode,    AssignHotbarPacket::decode,    AssignHotbarPacket::handle);
+        CHANNEL.registerMessage(id++, AssignFromSlotPacket.class,  AssignFromSlotPacket::encode,  AssignFromSlotPacket::decode,  AssignFromSlotPacket::handle);
+        CHANNEL.registerMessage(id++, RotateSlotPacket.class,      RotateSlotPacket::encode,      RotateSlotPacket::decode,      RotateSlotPacket::handle);
+        CHANNEL.registerMessage(id++, SyncUtilBindsPacket.class,   SyncUtilBindsPacket::encode,   SyncUtilBindsPacket::decode,   SyncUtilBindsPacket::handle);
+
+        registered = true;
     }
 
-    /** 클라에 유틸 바인딩 상태를 전송(숫자 오버레이/바인딩 해제 즉시 반영) */
-    public static void syncUtilBindings(ServerPlayer sp, PlayerEquipment eq) {
-        byte[] storage = new byte[PlayerEquipment.HOTBAR_COUNT];
-        int[]  index   = new int[PlayerEquipment.HOTBAR_COUNT];
-        for (int i = 0; i < storage.length; i++) {
-            PlayerEquipment.UtilBinding b = eq.peekBinding(i);
-            if (b == null) { storage[i] = -1; index[i] = -1; }
-            else {
-                storage[i] = (byte)(b.storage() == PlayerEquipment.Storage.BASE ? 0 : 1);
-                index[i]   = b.index();
-            }
-        }
-        CHANNEL.sendTo(new SyncUtilBindsPacket(storage, index), sp.connection.connection, net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT);
+    /** 서버 → 클라 : 장비/배낭 등 전체 스냅샷 동기화 */
+    public static void syncToClient(ServerPlayer sp, PlayerEquipment equipment) {
+        try {
+            // 현재 구현은 SyncEquipmentPacket(CompoundTag) 생성자를 요구
+            CompoundTag snapshot = equipment.saveNBT();
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> sp), new SyncEquipmentPacket(snapshot));
+        } catch (Throwable ignored) {}
+
+        // 유틸리티 바인딩(핫바 연동) 정보도 별도 패킷으로 동기화
+        syncUtilBindings(sp, equipment);
     }
+
+    /** 서버 → 클라 : 유틸리티 바인딩 동기화 */
+    public static void syncUtilBindings(ServerPlayer sp, PlayerEquipment equipment) {
+        try {
+            // 리포 현재 상태는 무인자 생성자 사용(encode 내부에서 서버 상태 참조)
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> sp), new SyncUtilBindsPacket());
+        } catch (Throwable ignored) {}
+    }
+
+    /** 클라 → 서버 : 커스텀 인벤토리 열기 요청 (현재 패킷은 (w,h) 필요) */
+    public static void sendOpenEquipment(int width, int height) {
+        try {
+            CHANNEL.sendToServer(new OpenEquipmentPacket(width, height));
+        } catch (Throwable ignored) {}
+    }
+
+    /** 서버 → 클라 : 커스텀 인벤토리 게임룰 통지 (전용 패킷이 없으면 NOP) */
+    public static void syncGamerule(ServerPlayer sp, boolean useCustomInventory) {
+        // 필요 시 별도 GameruleSyncPacket 추가 후 여기서 전송
+    }
+
+    private SyncEquipmentPacketHandler() {}
 }

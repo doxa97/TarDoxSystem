@@ -70,38 +70,32 @@ public class ServerEvents {
 
     /** Q 드롭: 1~4는 장비칸 해제, 5~9는 바인딩 원본에서 수량을 차감하여 드롭과 일치시키기 */
     @SubscribeEvent
-    public static void onItemToss(ItemTossEvent e) {
-        if (!(e.getPlayer() instanceof ServerPlayer sp)) return;
+    public static void onItemToss(net.minecraftforge.event.entity.item.ItemTossEvent e) {
+        if (!(e.getPlayer() instanceof net.minecraft.server.level.ServerPlayer sp)) return;
 
-        sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
+        sp.getCapability(fir.sec.tardoxinv.capability.ModCapabilities.EQUIPMENT).ifPresent(cap -> {
             int hb = sp.getInventory().selected;
-            PlayerEquipment.UtilBinding b = cap.peekBinding(hb);
+            var b = cap.peekBinding(hb);
             if (b == null) return;
 
-            // 바닐라 드롭 취소
-            e.setCanceled(true);
+            e.setCanceled(true); // 바닐라 드롭 취소
 
-            // 실제 연결 슬롯에서 1개 분리
-            ItemStack src;
+            net.minecraft.world.item.ItemStack src;
             if (b.storage() == PlayerEquipment.Storage.BASE) {
-                src = cap.getBase2x2_2D().getStackInSlot(b.index());
+                src = cap.getBase2x2().getStackInSlot(b.index());
             } else {
-                if (cap.getBackpack2D() == null) return;
-                src = cap.getBackpack2D().getStackInSlot(b.index());
+                if (cap.getBackpack() == null) return;
+                src = cap.getBackpack().getStackInSlot(b.index());
             }
             if (src.isEmpty()) { cap.unbindHotbar(sp, hb); return; }
 
-            ItemStack drop = src.split(1);
-            // 월드에 스폰
-            ItemEntity ent = sp.drop(drop, false);
+            var drop = src.split(1);
+            var ent = sp.drop(drop, false);
             if (ent != null) ent.setThrower(sp.getUUID());
 
-            // 슬롯 비었으면 해제
             cap.onSlotStackChanged(sp, b.storage(), b.index(), src);
-
-            // 클라 동기화
-            cap.updateBoundHotbar(sp);
-            SyncEquipmentPacketHandler.syncUtilBindings(sp, cap);
+            cap.syncUtilityHotbar(sp);
         });
     }
+
 }

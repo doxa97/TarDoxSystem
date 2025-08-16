@@ -1,125 +1,108 @@
 package fir.sec.tardoxinv.event;
 
-import fir.sec.tardoxinv.GameRuleRegister;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
-import fir.sec.tardoxinv.item.ModItems;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
-import fir.sec.tardoxinv.util.LinkIdUtil;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.entity.player.EntityItemPickupEvent;
-import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 @Mod.EventBusSubscriber
 public class CustomInventoryPickupHandler {
 
-    @SubscribeEvent(priority = EventPriority.HIGHEST)
-    public static void onItemPickup(EntityItemPickupEvent event) {
-        Player player = event.getEntity();
-        if (!(player instanceof ServerPlayer sp)) return;
+    @SubscribeEvent
+    public static void onPickup(EntityItemPickupEvent e) {
+        Player p = e.getEntity();
+        if (!(p instanceof ServerPlayer sp)) return;
 
-        boolean useCustom = sp.getServer().getGameRules().getBoolean(GameRuleRegister.USE_CUSTOM_INVENTORY);
-        if (!useCustom) return;
-
-        ItemStack picked = event.getItem().getItem();
-        var t = picked.getOrCreateTag();
-        if (!t.contains("Width"))  t.putInt("Width", 1);
-        if (!t.contains("Height")) t.putInt("Height", 1);
-
-        String slotType = picked.hasTag() ? picked.getTag().getString("slot_type") : "";
+        ItemEntity ent = e.getItem();
+        ItemStack stack = ent.getItem();
+        if (stack.isEmpty()) return;
 
         sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-            LinkIdUtil.ensureLinkId(picked);
-            ItemStack toPlace = picked.copy();
-            boolean added = false;
-
-            boolean isBackpackItem =
-                    picked.is(ModItems.SMALL_BACKPACK.get()) ||
-                            picked.is(ModItems.MEDIUM_BACKPACK.get()) ||
-                            picked.is(ModItems.LARGE_BACKPACK.get()) ||
-                            "backpack".equals(slotType);
-
+            // 1) 배낭 중복 습득 방지 + 장착 즉시 갱신
+            boolean isBackpackItem = isBackpack(stack);
             if (isBackpackItem) {
-                if (cap.getBackpackWidth() == 0 && cap.getBackpackItem().isEmpty()) {
-                    var tag = toPlace.getOrCreateTag();
-                    if (tag.getInt("Width") <= 0 || tag.getInt("Height") <= 0) {
-                        if (picked.is(ModItems.SMALL_BACKPACK.get())) { tag.putInt("Width",2); tag.putInt("Height",4); }
-                        else if (picked.is(ModItems.MEDIUM_BACKPACK.get())) { tag.putInt("Width",3); tag.putInt("Height",5); }
-                        else if (picked.is(ModItems.LARGE_BACKPACK.get())) { tag.putInt("Width",4); tag.putInt("Height",6); }
-                        tag.putString("slot_type","backpack");
-                    }
-                    cap.setBackpackItem(toPlace);
-                    added = true;
-                } else {
-                    added = tryAddToBaseOrBackpack(cap, toPlace);
+                if (!cap.getBackpackItem().isEmpty()) {
+                    // 이미 배낭이 있으면 이번 픽업은 커스텀 장착 로직을 막고 바닐라 처리 그대로 진행
+                    return;
                 }
-            } else if (!slotType.isEmpty()) {
-                added = tryEquip(cap, toPlace, slotType);
-                if (!added) added = tryAddToBaseOrBackpack(cap, toPlace);
-            } else {
-                added = tryAddToBaseOrBackpack(cap, toPlace);
+                // 첫 배낭 장착
+                ItemStack one = stack.split(1);
+                cap.setBackpackItem(one);
+                int w = readSize(one, "Width");
+                int h = readSize(one, "Height");
+                cap.resizeBackpack(Math.max(0, w), Math.max(0, h));
+                cap.remapBackpackBindingsAfterResize();
+                // 서버->클라 전체 동기화 (인벤토리 열려있어도 즉시 그리드가 보이게)
+                SyncEquipmentPacketHandler.syncToClient(sp, cap);
+                // 엔티티 아이템 정리
+                if (stack.isEmpty()) ent.discard();
+                e.setCanceled(true);
+                return;
             }
 
-            if (added) {
-                event.getItem().discard();
-                event.setCanceled(true);
-
-                cap.applyWeaponsToHotbar(sp);
-                cap.updateBoundHotbar(sp);
-                SyncEquipmentPacketHandler.syncToClient(sp, cap);
-                SyncEquipmentPacketHandler.syncUtilBindings(sp, cap);
+            // 2) 2x2(혹은 그 이상) 아이템: "되돌려두기" 실패/드롭 크래시 방지
+            //   픽업 시 커스텀 그리드로 먼저 삽입 시도 -> 실패하면 바닐라에 맡김
+            if (hasAnySize(stack)) {
+                ItemStack remain = tryInsertIntoCustomInventory(cap, stack);
+                if (remain.getCount() != stack.getCount()) {
+                    // 일부 혹은 전부 들어갔음 — 엔티티 갱신
+                    if (remain.isEmpty()) {
+                        ent.discard();
+                        e.setCanceled(true);
+                        SyncEquipmentPacketHandler.syncToClient(sp, cap);
+                        return;
+                    } else {
+                        ent.setItem(remain);
+                        e.setCanceled(true);
+                        SyncEquipmentPacketHandler.syncToClient(sp, cap);
+                        return;
+                    }
+                }
             }
         });
     }
 
-    private static boolean tryEquip(PlayerEquipment cap, ItemStack stack, String type) {
-        var eq = cap.getEquipment();
-        PlayerEquipment.ensureLink(stack);
-        switch (type) {
-            case "primary_weapon" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_PRIM1).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_PRIM1, stack); return true; }
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_PRIM2).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_PRIM2, stack); return true; }
-            }
-            case "secondary_weapon" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_SEC).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_SEC, stack); return true; }
-            }
-            case "melee_weapon" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_MELEE).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_MELEE, stack); return true; }
-            }
-            case "helmet" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_HELMET).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_HELMET, stack); return true; }
-            }
-            case "vest" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_VEST).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_VEST, stack); return true; }
-            }
-            case "headset" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_HEADSET).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_HEADSET, stack); return true; }
-            }
-        }
+    private static boolean isBackpack(ItemStack st) {
+        // 배낭 판정: 태그 혹은 아이템 자체로 판정하는 프로젝트 규칙에 맞춰 태그 우선
+        CompoundTag t = st.getTag();
+        if (t != null && (t.contains("Width") || t.contains("Height"))) return true;
+        // 추가 규칙이 있으면 여기에 (예: st.is(ModTags.BACKPACK) 등)
         return false;
     }
 
-    private static boolean tryAddToBaseOrBackpack(PlayerEquipment cap, ItemStack stack) {
+    private static boolean hasAnySize(ItemStack st) {
+        CompoundTag t = st.getTag();
+        return t != null && (t.contains("Width") || t.contains("Height"));
+    }
+
+    private static int readSize(ItemStack st, String key) {
+        CompoundTag t = st.getTag();
+        return (t != null && t.contains(key)) ? Math.max(0, t.getInt(key)) : 0;
+    }
+
+    /**
+     * 커스텀 인벤토리(기본2x2 + 배낭)에 삽입 시도
+     */
+    private static ItemStack tryInsertIntoCustomInventory(PlayerEquipment cap, ItemStack stack) {
+        ItemStack work = stack.copy();
+
+        // 기본 2x2 먼저
         var base = (fir.sec.tardoxinv.capability.GridItemHandler2D) cap.getBase2x2();
-        for (int i = 0; i < base.getSlots(); i++) {
-            if (!base.isAnchor(i) && !base.getStackInSlot(i).isEmpty()) continue;
-            if (base.getStackInSlot(i).isEmpty() && base.canPlaceAt(i, stack)) {
-                base.setStackInSlot(i, stack.copy());
-                return true;
-            }
+        work = base.insertItem2D(work, false);
+        if (work.isEmpty()) return ItemStack.EMPTY;
+
+        // 배낭 존재 시 배낭에도 시도
+        if (!cap.getBackpackItem().isEmpty() && cap.getBackpackWidth() > 0 && cap.getBackpackHeight() > 0) {
+            var bp = (fir.sec.tardoxinv.capability.GridItemHandler2D) cap.getBackpack();
+            work = bp.insertItem2D(work, false);
         }
-        var bp = (fir.sec.tardoxinv.capability.GridItemHandler2D) cap.getBackpack();
-        for (int i = 0; i < bp.getSlots(); i++) {
-            if (!bp.isAnchor(i) && !bp.getStackInSlot(i).isEmpty()) continue;
-            if (bp.getStackInSlot(i).isEmpty() && bp.canPlaceAt(i, stack)) {
-                bp.setStackInSlot(i, stack.copy());
-                return true;
-            }
-        }
-        return false;
+        return work;
     }
 }
