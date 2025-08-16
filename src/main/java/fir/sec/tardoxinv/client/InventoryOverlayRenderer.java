@@ -1,151 +1,154 @@
 package fir.sec.tardoxinv.client;
 
-import fir.sec.tardoxinv.TarDoxInv;
-import fir.sec.tardoxinv.capability.ModCapabilities;
-import fir.sec.tardoxinv.capability.PlayerEquipment;
+import com.mojang.blaze3d.systems.RenderSystem;
+import fir.sec.tardoxinv.menu.EquipmentMenu;
 import fir.sec.tardoxinv.menu.GridSlot;
-import fir.sec.tardoxinv.screen.EquipmentScreen;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-/** 인벤토리(장비창) 오버레이 렌더러 */
-@Mod.EventBusSubscriber(modid = TarDoxInv.MODID, value = Dist.CLIENT)
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 인벤토리 오버레이 렌더러
+ * - 실제 슬롯 좌표에 정확히 맞춘 그리드
+ * - 커서/호버 아이템의 차지 영역 프리뷰(초록: 가능, 빨강: 불가)
+ * - 바닐라 툴팁을 인벤토리 오른쪽 영역에 렌더
+ */
+@Mod.EventBusSubscriber(value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class InventoryOverlayRenderer {
 
     @SubscribeEvent
-    public static void onRenderScreen(ScreenEvent.Render.Post e) {
-        if (!(e.getScreen() instanceof EquipmentScreen scr)) return;
-
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
+    public static void onScreenRenderPost(ScreenEvent.Render.Post e) {
+        if (!(e.getScreen() instanceof AbstractContainerScreen<?> scr)) return;
+        if (!(scr.getMenu() instanceof EquipmentMenu menu)) return;
 
         GuiGraphics g = e.getGuiGraphics();
-        Font font = mc.font;
         int left = scr.getGuiLeft();
         int top  = scr.getGuiTop();
 
-        // (A) 멀티칸 점유 영역: 항상 표시, 호버는 진하게
-        Slot hover = scr.getSlotUnderMouse();
+        // 1) 슬롯 그리드(반투명 회색)
+        drawGridForGridSlots(g, scr, 0x40FFFFFF);
+
+        // 2) 아이템 footprint 프리뷰
+        drawFootprintPreview(g, scr, menu);
+
+        // 3) 바닐라 툴팁을 오른쪽에 출력
+        renderVanillaTooltipOnRight(g, scr, left, top);
+    }
+
+    private static void drawGridForGridSlots(GuiGraphics g, AbstractContainerScreen<?> scr, int argb) {
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
         for (Slot s : scr.getMenu().slots) {
             if (!(s instanceof GridSlot)) continue;
-            ItemStack st = s.getItem();
-            if (st.isEmpty()) continue;
+            int x = scr.getGuiLeft() + s.x;
+            int y = scr.getGuiTop()  + s.y;
+            fill(g, x + 1, y + 1, x + 17, y + 17, argb);
+        }
+    }
 
-            int w = st.hasTag() ? Math.max(1, st.getTag().getInt("Width")) : 1;
-            int h = st.hasTag() ? Math.max(1, st.getTag().getInt("Height")) : 1;
-            int baseX = left + s.x;
-            int baseY = top  + s.y;
+    private static void drawFootprintPreview(GuiGraphics g, AbstractContainerScreen<?> scr, EquipmentMenu menu) {
+        ItemStack carried = menu.getCarried();
+        Slot hovered = scr.getSlotUnderMouse();
+        if (!(hovered instanceof GridSlot gs)) return;
 
-            int color = (s == hover) ? 0x66000000 : 0x33000000;
-            g.pose().pushPose();
-            g.pose().translate(0, 0, 250);
-            for (int dx=0; dx<w; dx++){
-                for (int dy=0; dy<h; dy++){
-                    int x = baseX + dx*18;
-                    int y = baseY + dy*18;
-                    g.fill(x+1, y+1, x+17, y+17, color);
-                }
+        ItemStack target = carried.isEmpty() ? gs.getItem() : carried;
+        if (target.isEmpty()) return;
+
+        Size sz = readSize(target);
+        if (sz.w <= 1 && sz.h <= 1) return;
+
+        int ax = scr.getGuiLeft() + gs.x;
+        int ay = scr.getGuiTop()  + gs.y;
+
+        boolean ok = canPlaceVisually(scr, gs, sz);
+        int color = ok ? 0x4019FF19 : 0x40FF3B30;
+
+        for (int dy = 0; dy < sz.h; dy++) {
+            for (int dx = 0; dx < sz.w; dx++) {
+                int x = ax + dx * 18;
+                int y = ay + dy * 18;
+                fill(g, x + 1, y + 1, x + 17, y + 17, color);
             }
-            g.pose().popPose();
+        }
+    }
+
+    private static void renderVanillaTooltipOnRight(GuiGraphics g, AbstractContainerScreen<?> scr, int left, int top) {
+        Slot hovered = scr.getSlotUnderMouse();
+        ItemStack stack = ItemStack.EMPTY;
+        if (hovered != null) stack = hovered.getItem();
+        if (stack.isEmpty()) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        TooltipFlag flag = mc.options.advancedItemTooltips ? TooltipFlag.ADVANCED : TooltipFlag.NORMAL;
+        List<Component> lines = new ArrayList<>(stack.getTooltipLines(mc.player, flag));
+        if (lines.isEmpty()) return;
+
+        int tipX = left + 176 + 8; // 기본 컨테이너 너비 기준 우측 여백
+        int tipY = top + 8;
+
+        // 1.20.1 시그니처: (Font, List<Component>, Optional<TooltipComponent>, int, int)
+        g.renderTooltip(mc.font, lines, stack.getTooltipImage(), tipX, tipY);
+    }
+
+    private static Size readSize(ItemStack st) {
+        int w = 1, h = 1;
+        CompoundTag tag = st.getTag();
+        if (tag != null) {
+            int W = tag.getInt("Width");
+            int H = tag.getInt("Height");
+            boolean rot = tag.getBoolean("Rot");
+            if (W > 0) w = W;
+            if (H > 0) h = H;
+            if (rot) { int t = w; w = h; h = t; }
+        }
+        return new Size(w, h);
+    }
+
+    private static boolean canPlaceVisually(AbstractContainerScreen<?> scr, GridSlot anchor, Size sz) {
+        List<GridSlot> gridSlots = new ArrayList<>();
+        for (Slot s : scr.getMenu().slots) if (s instanceof GridSlot gs) gridSlots.add(gs);
+
+        List<GridSlot> want = new ArrayList<>();
+        for (int dy = 0; dy < sz.h; dy++) {
+            for (int dx = 0; dx < sz.w; dx++) {
+                int tx = anchor.x + dx * 18;
+                int ty = anchor.y + dy * 18;
+                GridSlot target = findSlotAt(gridSlots, tx, ty);
+                if (target == null) return false;
+                want.add(target);
+            }
         }
 
-        // (B) 커서(carried) 아이템 프리뷰: 배치 가능/불가 영역
-        ItemStack carried = scr.getMenu().getCarried();
-        if (!carried.isEmpty() && hover instanceof GridSlot gs) {
-            int w = carried.hasTag() ? Math.max(1, carried.getTag().getInt("Width")) : 1;
-            int h = carried.hasTag() ? Math.max(1, carried.getTag().getInt("Height")) : 1;
-            int baseX = left + hover.x;
-            int baseY = top  + hover.y;
-
-            // GridSlot.mayPlace를 그대로 이용(앵커 비어있고 충돌X)
-            boolean ok = gs.mayPlace(carried);
-            int color = ok ? 0x5500FF00 : 0x55FF0000; // 가능: 초록, 불가: 빨강 (반투명)
-
-            g.pose().pushPose();
-            g.pose().translate(0, 0, 260);
-            for (int dx=0; dx<w; dx++){
-                for (int dy=0; dy<h; dy++){
-                    int x = baseX + dx*18;
-                    int y = baseY + dy*18;
-                    g.fill(x+1, y+1, x+17, y+17, color);
-                }
-            }
-            g.pose().popPose();
-
-            // 간단 툴팁 (WxH / slot_type)
-            String stype = carried.hasTag() ? carried.getTag().getString("slot_type") : "";
-            String info  = w + "×" + h + (stype.isEmpty() ? "" : "  • " + stype);
-            g.pose().pushPose();
-            g.pose().translate(0, 0, 300);
-            int mx = e.getMouseX();
-            int my = e.getMouseY();
-            int wtxt = font.width(info);
-            g.fill(mx - 3, my - 12, mx + wtxt + 3, my, 0xC0000000);
-            g.drawString(font, info, mx, my - 10, 0xFFFFFF, false);
-            g.pose().popPose();
+        ItemStack self = anchor.getItem();
+        for (GridSlot s : want) {
+            ItemStack cur = s.getItem();
+            if (!cur.isEmpty() && cur != self) return false;
         }
-
-        // (C) 바인딩 번호 배지 (5~9): 가독성 ↑
-        mc.player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-            final int baseStart = 1 + PlayerEquipment.EQUIP_SLOTS; // 8
-            final int baseEnd   = baseStart + 4 - 1;               // 11
-            final int bpStart   = baseStart + 4;                   // 12
-
-            for (int si = 0; si < scr.getMenu().slots.size(); si++) {
-                Slot slot = scr.getMenu().slots.get(si);
-
-                // 기본 2×2
-                if (si >= baseStart && si <= baseEnd) {
-                    int baseIdx = si - baseStart;
-                    int hotbar = findHotbarFor(cap, PlayerEquipment.Storage.BASE, baseIdx);
-                    if (hotbar >= 0) drawBadgeAbove(g, font, left + slot.x, top + slot.y, String.valueOf(hotbar + 1));
-                    continue;
-                }
-                // 배낭
-                int bpSlots = getBackpackSlots(scr.getMenu());
-                if (bpSlots > 0 && si >= bpStart && si < bpStart + bpSlots) {
-                    int bpIdx = si - bpStart;
-                    int hotbar = findHotbarFor(cap, PlayerEquipment.Storage.BACKPACK, bpIdx);
-                    if (hotbar >= 0) drawBadgeAbove(g, font, left + slot.x, top + slot.y, String.valueOf(hotbar + 1));
-                }
-            }
-        });
+        return true;
     }
 
-    private static int findHotbarFor(PlayerEquipment cap, PlayerEquipment.Storage storage, int index) {
-        for (int hb = 4; hb <= 8; hb++) {
-            PlayerEquipment.UtilBinding b = cap.peekBinding(hb);
-            if (b != null && b.storage == storage && b.index == index) return hb;
+    private static GridSlot findSlotAt(List<GridSlot> list, int relX, int relY) {
+        for (GridSlot gs : list) {
+            if (gs.x == relX && gs.y == relY) return gs;
         }
-        return -1;
+        return null;
     }
 
-    private static void drawBadgeAbove(GuiGraphics g, Font font, int slotPx, int slotPy, String text) {
-        g.pose().pushPose();
-        g.pose().translate(0, 0, 300);
-        int x = slotPx + 1;
-        int y = slotPy + 1;
-        int w = font.width(text);
-        g.fill(x - 3, y - 2, x + w + 3, y + 10, 0xC0000000);
-        g.hLine(x - 3, x + w + 3, y - 2, 0x80FFFFFF);
-        g.hLine(x - 3, x + w + 3, y + 10, 0x80000000);
-        g.drawString(font, text, x, y, 0xFFFFFF, true);
-        g.pose().popPose();
+    private static void fill(GuiGraphics g, int x1, int y1, int x2, int y2, int argb) {
+        g.fill(x1, y1, x2, y2, argb);
     }
 
-    private static int getBackpackSlots(AbstractContainerMenu menu) {
-        int total = menu.slots.size();
-        int fixed = 1 + PlayerEquipment.EQUIP_SLOTS + 4;
-        int bp = total - fixed;
-        return Math.max(0, bp);
-    }
+    private record Size(int w, int h) {}
 }

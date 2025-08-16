@@ -1,40 +1,30 @@
 package fir.sec.tardoxinv.handler;
 
-import fir.sec.tardoxinv.client.ClientState;
-import fir.sec.tardoxinv.network.RotateCarriedPacket;
+import fir.sec.tardoxinv.TarDoxInv;
 import fir.sec.tardoxinv.network.RotateSlotPacket;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.glfw.GLFW;
 
-@Mod.EventBusSubscriber(value = Dist.CLIENT)
+/**
+ * R 키 입력 → 커서에 들고 있는 아이템 회전 요청(무인자 패킷).
+ * KeyMapping 의존성을 피해서 직접 GLFW 키코드 검사.
+ */
+@Mod.EventBusSubscriber(modid = TarDoxInv.MODID, value = Dist.CLIENT)
 public class RotateKeyHandler {
+
     @SubscribeEvent
-    public static void onKey(InputEvent.Key e) {
-        if (!ClientState.USE_CUSTOM_INVENTORY) return;
-        if (e.getAction() != 1) return; // PRESS
-        if (e.getKey() == GLFW.GLFW_KEY_R) {
-            var mc = Minecraft.getInstance();
-            if (mc.screen instanceof AbstractContainerScreen<?> scr) {
-                var slot = scr.getSlotUnderMouse();
-                if (slot != null) {
-                    int menuSlotId = scr.getMenu().slots.indexOf(slot);
-                    if (menuSlotId >= 0) {
-                        SyncEquipmentPacketHandler.CHANNEL.sendToServer(new RotateSlotPacket(menuSlotId));
-                        return;
-                    }
-                }
-                // 슬롯이 없으면 커서 회전
-                SyncEquipmentPacketHandler.CHANNEL.sendToServer(new RotateCarriedPacket());
-                return;
-            }
-            // 장비창 아닐 때는 커서 회전만
-            SyncEquipmentPacketHandler.CHANNEL.sendToServer(new RotateCarriedPacket());
+    public static void onKey(InputEvent.Key event) {
+        // 키가 눌린 순간만 처리
+        if (event.getAction() != GLFW.GLFW_PRESS) return;
+
+        // 기본 키: R
+        if (event.getKey() == GLFW.GLFW_KEY_R) {
+            // 무인자 패킷 전송(encode/decode payload 없음)
+            SyncEquipmentPacketHandler.CHANNEL.sendToServer(new RotateSlotPacket());
         }
     }
 }

@@ -4,17 +4,18 @@ import fir.sec.tardoxinv.GameRuleRegister;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
-import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.item.ItemTossEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
 
-@net.minecraftforge.fml.common.Mod.EventBusSubscriber
+@Mod.EventBusSubscriber(bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class ServerEvents {
 
     @SubscribeEvent
@@ -43,7 +44,6 @@ public class ServerEvents {
     public static void onPlayerTick(TickEvent.PlayerTickEvent e) {
         if (e.phase != TickEvent.Phase.END) return;
         if (!(e.player instanceof ServerPlayer sp)) return;
-
         boolean useCustom = sp.getServer().getGameRules().getBoolean(GameRuleRegister.USE_CUSTOM_INVENTORY);
         if (!useCustom) return;
 
@@ -55,16 +55,12 @@ public class ServerEvents {
         }
 
         sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-            // 1) 무기 핫바(0~3) → 장비칸 동기화(연동)
-            reconcileWeapons(sp, cap);
+            // 유틸 바인딩 동기화(핫바 소비/드롭 → 원본 소모)
+            cap.syncUtilityHotbar(sp);
 
-            // 2) 유틸(5~9) 동기화(버전별 메서드명 호환)
-            callUtilitySync(cap, sp);
-
-            // 3) 장비칸 → 핫바(1~4) 미러 갱신
-            cap.applyWeaponsToHotbar(sp);
-
+            // 장비 미러(1~4) 필요시
             if (cap.isDirty()) {
+                cap.applyWeaponsToHotbar(sp);
                 sp.containerMenu.broadcastChanges();
                 sp.inventoryMenu.broadcastChanges();
                 cap.clearDirty();
@@ -72,115 +68,40 @@ public class ServerEvents {
         });
     }
 
-    /** 드롭 차단은 하지 않되, 핫바(1~4)에서 무기 드롭 시 장비칸을 비워서 동기화 유지 */
+    /** Q 드롭: 1~4는 장비칸 해제, 5~9는 바인딩 원본에서 수량을 차감하여 드롭과 일치시키기 */
     @SubscribeEvent
     public static void onItemToss(ItemTossEvent e) {
         if (!(e.getPlayer() instanceof ServerPlayer sp)) return;
-        boolean use = sp.getServer().getGameRules().getBoolean(GameRuleRegister.USE_CUSTOM_INVENTORY);
-        if (!use) return;
-
-        ItemStack tossed = e.getEntity().getItem();
-        int selected = sp.getInventory().selected; // 0~8
-        java.util.UUID id = LinkIdUtil.getLinkId(tossed);
 
         sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-            var eq = cap.getEquipment();
+            int hb = sp.getInventory().selected;
+            PlayerEquipment.UtilBinding b = cap.peekBinding(hb);
+            if (b == null) return;
 
-            boolean clearedByLink = false;
-            if (id != null) {
-                for (int slot : new int[] {
-                        PlayerEquipment.SLOT_PRIM1,
-                        PlayerEquipment.SLOT_PRIM2,
-                        PlayerEquipment.SLOT_SEC,
-                        PlayerEquipment.SLOT_MELEE
-                }) {
-                    ItemStack s = eq.getStackInSlot(slot);
-                    if (!s.isEmpty() && s.hasTag() && s.getTag().hasUUID("link_id")
-                            && id.equals(s.getTag().getUUID("link_id"))) {
-                        eq.setStackInSlot(slot, ItemStack.EMPTY);
-                        clearedByLink = true;
-                    }
-                }
-            }
+            // 바닐라 드롭 취소
+            e.setCanceled(true);
 
-            if (!clearedByLink && selected >= 0 && selected <= 3) {
-                int mappedSlot = switch (selected) {
-                    case 0 -> PlayerEquipment.SLOT_PRIM1;
-                    case 1 -> PlayerEquipment.SLOT_PRIM2;
-                    case 2 -> PlayerEquipment.SLOT_SEC;
-                    default -> PlayerEquipment.SLOT_MELEE;
-                };
-                ItemStack s = eq.getStackInSlot(mappedSlot);
-                if (!s.isEmpty() && ItemStack.isSameItemSameTags(s, tossed)) {
-                    eq.setStackInSlot(mappedSlot, ItemStack.EMPTY);
-                }
-            }
-
-            cap.applyWeaponsToHotbar(sp);
-            SyncEquipmentPacketHandler.syncToClient(sp, cap);
-        });
-    }
-
-    /* === 내부 유틸 === */
-
-    // 핫바(0~3)의 변경(사용, 내구도, 제거 등)을 장비칸에 반영
-    private static void reconcileWeapons(ServerPlayer sp, PlayerEquipment cap) {
-        var inv = sp.getInventory();
-        var eq  = cap.getEquipment();
-
-        int[] map = new int[] {
-                PlayerEquipment.SLOT_PRIM1,
-                PlayerEquipment.SLOT_PRIM2,
-                PlayerEquipment.SLOT_SEC,
-                PlayerEquipment.SLOT_MELEE
-        };
-
-        for (int i = 0; i < 4; i++) {
-            ItemStack hb = inv.getItem(i);
-            ItemStack es = eq.getStackInSlot(map[i]);
-
-            java.util.UUID hId = LinkIdUtil.getLinkId(hb);
-            java.util.UUID eId = LinkIdUtil.getLinkId(es);
-
-            // (A) 둘 다 비어있으면 패스
-            if (hb.isEmpty() && es.isEmpty()) continue;
-
-            // (B) 핫바 비었고 장비칸 존재 → 장비칸 제거
-            if (hb.isEmpty() && !es.isEmpty()) {
-                eq.setStackInSlot(map[i], ItemStack.EMPTY);
-                continue;
-            }
-
-            // (C) 장비칸 비었고 핫바 존재 → 장비칸에 채움 (신규 링크 보정)
-            if (!hb.isEmpty() && es.isEmpty()) {
-                LinkIdUtil.ensureLinkId(hb);
-                eq.setStackInSlot(map[i], hb.copy());
-                continue;
-            }
-
-            // (D) 둘 다 존재: 같은 link_id면 핫바 변경(내구/수량/NBT)을 장비칸으로 업서트
-            if (hId != null && eId != null && hId.equals(eId)) {
-                eq.setStackInSlot(map[i], hb.copy());
+            // 실제 연결 슬롯에서 1개 분리
+            ItemStack src;
+            if (b.storage() == PlayerEquipment.Storage.BASE) {
+                src = cap.getBase2x2_2D().getStackInSlot(b.index());
             } else {
-                // 링크 다르면: 장비칸을 핫바 것으로 교체(사용자가 바꿨다고 판단)
-                LinkIdUtil.ensureLinkId(hb);
-                eq.setStackInSlot(map[i], hb.copy());
+                if (cap.getBackpack2D() == null) return;
+                src = cap.getBackpack2D().getStackInSlot(b.index());
             }
-        }
-    }
+            if (src.isEmpty()) { cap.unbindHotbar(sp, hb); return; }
 
-    // syncUtilityHotbar(ServerPlayer) 또는 tickMirrorUtilityHotbar(ServerPlayer) 호출 (버전 호환)
-    private static void callUtilitySync(PlayerEquipment cap, ServerPlayer sp) {
-        try {
-            var m = cap.getClass().getMethod("syncUtilityHotbar", ServerPlayer.class);
-            m.invoke(cap, sp);
-            return;
-        } catch (NoSuchMethodException ignore) { /* 다음 후보 */ }
-        catch (Exception ignore) { return; }
+            ItemStack drop = src.split(1);
+            // 월드에 스폰
+            ItemEntity ent = sp.drop(drop, false);
+            if (ent != null) ent.setThrower(sp.getUUID());
 
-        try {
-            var m2 = cap.getClass().getMethod("tickMirrorUtilityHotbar", ServerPlayer.class);
-            m2.invoke(cap, sp);
-        } catch (Exception ignore) { }
+            // 슬롯 비었으면 해제
+            cap.onSlotStackChanged(sp, b.storage(), b.index(), src);
+
+            // 클라 동기화
+            cap.updateBoundHotbar(sp);
+            SyncEquipmentPacketHandler.syncUtilBindings(sp, cap);
+        });
     }
 }

@@ -3,7 +3,6 @@ package fir.sec.tardoxinv.network;
 import fir.sec.tardoxinv.GameRuleRegister;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
-import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -29,58 +28,39 @@ public class AssignHotbarPacket {
             if (m.hotbarIndex < 4 || m.hotbarIndex > 8) return;
 
             ItemStack carried = sp.containerMenu.getCarried();
-            if (carried.isEmpty()) return;
+            if (carried.isEmpty() || !carried.hasTag()) return;
+            if (!"utility".equals(carried.getTag().getString("slot_type"))) return;
 
             LinkIdUtil.ensureLinkId(carried);
             UUID id = LinkIdUtil.getLinkId(carried);
 
             sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-                // BASE(2x2)에서 먼저 검색(같은 link_id 또는 같은 아이템)
-                int baseIdx = findInBase(cap.getBase2x2(), carried, id);
+                // base 먼저, 없으면 backpack에서 같은 link/item 탐색
+                int baseIdx = findInHandler(cap.getBase2x2(), carried, id);
                 if (baseIdx >= 0) {
                     cap.bindFromBase(sp, m.hotbarIndex, baseIdx);
                     SyncEquipmentPacketHandler.syncUtilBindings(sp, cap);
-                    sp.containerMenu.broadcastChanges();
-                    sp.inventoryMenu.broadcastChanges();
                     return;
                 }
-
-                // BACKPACK(2D)에서 검색(앵커만 노출되므로 getStackInSlot 순회로 충분)
-                int bpIdx = findInBackpack(cap.getBackpack2D(), carried, id);
+                int bpIdx = findInHandler(cap.getBackpack(), carried, id);
                 if (bpIdx >= 0) {
                     cap.bindFromBackpack(sp, m.hotbarIndex, bpIdx);
                     SyncEquipmentPacketHandler.syncUtilBindings(sp, cap);
-                    sp.containerMenu.broadcastChanges();
-                    sp.inventoryMenu.broadcastChanges();
                 }
             });
         });
         ctx.get().setPacketHandled(true);
     }
 
-    private static int findInBase(ItemStackHandler base, ItemStack target, UUID id) {
-        for (int i = 0; i < base.getSlots(); i++) {
-            ItemStack it = base.getStackInSlot(i);
+    private static int findInHandler(ItemStackHandler h, ItemStack exemplar, UUID id) {
+        if (h == null) return -1;
+        for (int i=0;i<h.getSlots();i++) {
+            ItemStack it = h.getStackInSlot(i);
             if (it.isEmpty()) continue;
-            if (sameLink(it, id) || ItemStack.isSameItemSameTags(it, target)) {
-                return i;
-            }
+            if (id != null && it.hasTag() && it.getTag().hasUUID("link_id")
+                    && id.equals(it.getTag().getUUID("link_id"))) return i;
+            if (it.getItem()==exemplar.getItem()) return i;
         }
         return -1;
-    }
-
-    private static int findInBackpack(GridItemHandler2D bp, ItemStack target, UUID id) {
-        for (int i = 0; i < bp.getSlots(); i++) {
-            ItemStack it = bp.getStackInSlot(i);
-            if (it.isEmpty()) continue; // 커버칸은 EMPTY 반환
-            if (sameLink(it, id) || ItemStack.isSameItemSameTags(it, target)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static boolean sameLink(ItemStack it, UUID id) {
-        return it.hasTag() && it.getTag().hasUUID("link_id") && it.getTag().getUUID("link_id").equals(id);
     }
 }

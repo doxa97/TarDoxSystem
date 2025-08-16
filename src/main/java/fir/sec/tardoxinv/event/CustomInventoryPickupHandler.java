@@ -3,7 +3,6 @@ package fir.sec.tardoxinv.event;
 import fir.sec.tardoxinv.GameRuleRegister;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
-import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.item.ModItems;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 import fir.sec.tardoxinv.util.LinkIdUtil;
@@ -27,68 +26,100 @@ public class CustomInventoryPickupHandler {
         if (!useCustom) return;
 
         ItemStack picked = event.getItem().getItem();
-        if (picked.isEmpty()) return;
+        var t = picked.getOrCreateTag();
+        if (!t.contains("Width"))  t.putInt("Width", 1);
+        if (!t.contains("Height")) t.putInt("Height", 1);
+
+        String slotType = picked.hasTag() ? picked.getTag().getString("slot_type") : "";
 
         sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
             LinkIdUtil.ensureLinkId(picked);
             ItemStack toPlace = picked.copy();
             boolean added = false;
 
-            // 배낭류(직접 장착) 판별
             boolean isBackpackItem =
-                    toPlace.is(ModItems.SMALL_BACKPACK.get()) ||
-                            toPlace.is(ModItems.MEDIUM_BACKPACK.get()) ||
-                            toPlace.is(ModItems.LARGE_BACKPACK.get()) ||
-                            (toPlace.hasTag() && "backpack".equals(toPlace.getTag().getString("slot_type")));
+                    picked.is(ModItems.SMALL_BACKPACK.get()) ||
+                            picked.is(ModItems.MEDIUM_BACKPACK.get()) ||
+                            picked.is(ModItems.LARGE_BACKPACK.get()) ||
+                            "backpack".equals(slotType);
 
             if (isBackpackItem) {
                 if (cap.getBackpackWidth() == 0 && cap.getBackpackItem().isEmpty()) {
                     var tag = toPlace.getOrCreateTag();
                     if (tag.getInt("Width") <= 0 || tag.getInt("Height") <= 0) {
-                        if (toPlace.is(ModItems.SMALL_BACKPACK.get())) { tag.putInt("Width",2); tag.putInt("Height",4); }
-                        else if (toPlace.is(ModItems.MEDIUM_BACKPACK.get())) { tag.putInt("Width",3); tag.putInt("Height",5); }
-                        else if (toPlace.is(ModItems.LARGE_BACKPACK.get())) { tag.putInt("Width",4); tag.putInt("Height",6); }
+                        if (picked.is(ModItems.SMALL_BACKPACK.get())) { tag.putInt("Width",2); tag.putInt("Height",4); }
+                        else if (picked.is(ModItems.MEDIUM_BACKPACK.get())) { tag.putInt("Width",3); tag.putInt("Height",5); }
+                        else if (picked.is(ModItems.LARGE_BACKPACK.get())) { tag.putInt("Width",4); tag.putInt("Height",6); }
                         tag.putString("slot_type","backpack");
                     }
                     cap.setBackpackItem(toPlace);
                     added = true;
                 } else {
-                    added = tryAddToBaseFirstOrBackpack(cap, toPlace);
+                    added = tryAddToBaseOrBackpack(cap, toPlace);
                 }
+            } else if (!slotType.isEmpty()) {
+                added = tryEquip(cap, toPlace, slotType);
+                if (!added) added = tryAddToBaseOrBackpack(cap, toPlace);
             } else {
-                // 일반 아이템: 1x1은 기본 2x2 먼저, 다칸은 배낭 우선
-                added = tryAddToBaseFirstOrBackpack(cap, toPlace);
+                added = tryAddToBaseOrBackpack(cap, toPlace);
             }
 
             if (added) {
-                // 성공한 경우에만 엔티티 제거/취소
                 event.getItem().discard();
                 event.setCanceled(true);
 
                 cap.applyWeaponsToHotbar(sp);
+                cap.updateBoundHotbar(sp);
                 SyncEquipmentPacketHandler.syncToClient(sp, cap);
+                SyncEquipmentPacketHandler.syncUtilBindings(sp, cap);
             }
-            // 실패 시 바닐라로 넘겨서 증발 방지(취소 X, discard X)
         });
     }
 
-    private static boolean tryAddToBaseFirstOrBackpack(PlayerEquipment cap, ItemStack stack) {
-        if (stack.isEmpty()) return false;
-        int w = stack.hasTag() ? Math.max(1, stack.getTag().getInt("Width")) : 1;
-        int h = stack.hasTag() ? Math.max(1, stack.getTag().getInt("Height")) : 1;
-
-        // 1x1 → 기본 2x2 우선
-        if (w == 1 && h == 1) {
-            var base = cap.getBase2x2();
-            for (int i = 0; i < base.getSlots(); i++) {
-                if (base.getStackInSlot(i).isEmpty()) {
-                    base.setStackInSlot(i, stack.copy());
-                    return true;
-                }
+    private static boolean tryEquip(PlayerEquipment cap, ItemStack stack, String type) {
+        var eq = cap.getEquipment();
+        PlayerEquipment.ensureLink(stack);
+        switch (type) {
+            case "primary_weapon" -> {
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_PRIM1).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_PRIM1, stack); return true; }
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_PRIM2).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_PRIM2, stack); return true; }
             }
-            return cap.getBackpack2D().tryPlaceFirstFit(stack);
+            case "secondary_weapon" -> {
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_SEC).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_SEC, stack); return true; }
+            }
+            case "melee_weapon" -> {
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_MELEE).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_MELEE, stack); return true; }
+            }
+            case "helmet" -> {
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_HELMET).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_HELMET, stack); return true; }
+            }
+            case "vest" -> {
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_VEST).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_VEST, stack); return true; }
+            }
+            case "headset" -> {
+                if (eq.getStackInSlot(PlayerEquipment.SLOT_HEADSET).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_HEADSET, stack); return true; }
+            }
         }
-        // 다칸 → 배낭
-        return cap.getBackpack2D().tryPlaceFirstFit(stack);
+        return false;
+    }
+
+    private static boolean tryAddToBaseOrBackpack(PlayerEquipment cap, ItemStack stack) {
+        var base = (fir.sec.tardoxinv.capability.GridItemHandler2D) cap.getBase2x2();
+        for (int i = 0; i < base.getSlots(); i++) {
+            if (!base.isAnchor(i) && !base.getStackInSlot(i).isEmpty()) continue;
+            if (base.getStackInSlot(i).isEmpty() && base.canPlaceAt(i, stack)) {
+                base.setStackInSlot(i, stack.copy());
+                return true;
+            }
+        }
+        var bp = (fir.sec.tardoxinv.capability.GridItemHandler2D) cap.getBackpack();
+        for (int i = 0; i < bp.getSlots(); i++) {
+            if (!bp.isAnchor(i) && !bp.getStackInSlot(i).isEmpty()) continue;
+            if (bp.getStackInSlot(i).isEmpty() && bp.canPlaceAt(i, stack)) {
+                bp.setStackInSlot(i, stack.copy());
+                return true;
+            }
+        }
+        return false;
     }
 }

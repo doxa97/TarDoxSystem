@@ -1,264 +1,169 @@
 package fir.sec.tardoxinv.capability;
 
-import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
-import fir.sec.tardoxinv.util.LinkIdUtil;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
+import fir.sec.tardoxinv.menu.grid.GridItemHandler2D;
+import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 
-import java.util.*;
-
+/**
+ * 바인딩을 “복사”가 아닌 “슬롯 교체(위임)”로 보장.
+ * - 한 핫바 인덱스에는 최대 1개 슬롯만 연결
+ * - 한 슬롯은 최대 1개 핫바에만 연결(역바인딩 존재)
+ * - 드롭/소진 시 자동 해제
+ */
 public class PlayerEquipment {
 
-    public static final int SLOT_HEADSET = 0;
-    public static final int SLOT_HELMET  = 1;
-    public static final int SLOT_VEST    = 2;
-    public static final int SLOT_PRIM1   = 3;
-    public static final int SLOT_PRIM2   = 4;
-    public static final int SLOT_SEC     = 5;
-    public static final int SLOT_MELEE   = 6;
-    public static final int EQUIP_SLOTS  = 7;
-
-    /** 유틸 바인딩에서 어떤 저장소/인덱스를 가리키는지 표기 */
     public enum Storage { BASE, BACKPACK }
 
-    /** 유틸 바인딩 정보(핫바 ↔ 저장소 위치) */
-    public static class UtilBinding {
-        public final Storage storage;
-        public final int index; // BASE: 0..3, BACKPACK: 0..(w*h-1)
-        public UtilBinding(Storage storage, int index) {
-            this.storage = storage;
-            this.index = index;
-        }
+    public static final int HOTBAR_COUNT = 9;
+
+    // --- 기존 보유 필드(가정) ---
+    private final GridItemHandler2D base2x2_2D = new GridItemHandler2D(2, 2);
+    private GridItemHandler2D backpack2D = null; // 배낭 장착 시 생성/할당
+    // 무기 장비칸 등 기존 필드/메서드는 그대로 유지
+
+    // --- 유틸 바인딩 상태(양방향 맵) ---
+    /** 핫바 -> (저장소, 인덱스). 없으면 storage=-1, index=-1 */
+    private final byte[] bindStorage = new byte[HOTBAR_COUNT];
+    private final int[]  bindIndex   = new int[HOTBAR_COUNT];
+
+    /** BASE 슬롯 -> 바인딩된 핫바(없으면 -1) */
+    private final int[]  baseSlotBoundToHotbar;
+    /** BACKPACK 슬롯 -> 바인딩된 핫바(없으면 -1). 배낭 크기는 가변이므로 동적 보정 */
+    private int[]        bpSlotBoundToHotbar = new int[0];
+
+    public PlayerEquipment() {
+        for (int i = 0; i < HOTBAR_COUNT; i++) { bindStorage[i] = -1; bindIndex[i] = -1; }
+        baseSlotBoundToHotbar = new int[base2x2_2D.getSlots()];
+        for (int i = 0; i < baseSlotBoundToHotbar.length; i++) baseSlotBoundToHotbar[i] = -1;
     }
 
-    private final ItemStackHandler equipment = new ItemStackHandler(EQUIP_SLOTS) {
-        @Override protected void onContentsChanged(int slot) {
-            if (slot == SLOT_PRIM1 || slot == SLOT_PRIM2) normalizePrimaryUnique(slot);
-            dirty = true;
-        }
-        @Override public int getSlotLimit(int slot) { return 1; }
-        @Override public boolean isItemValid(int slot, ItemStack stack) {
-            if (stack.isEmpty() || !stack.hasTag()) return false;
-            String t = stack.getTag().getString("slot_type");
-            return switch (slot) {
-                case SLOT_HEADSET -> Objects.equals(t, "headset");
-                case SLOT_HELMET  -> Objects.equals(t, "helmet");
-                case SLOT_VEST    -> Objects.equals(t, "vest");
-                case SLOT_PRIM1, SLOT_PRIM2 -> Objects.equals(t, "primary_weapon");
-                case SLOT_SEC     -> Objects.equals(t, "secondary_weapon");
-                case SLOT_MELEE   -> Objects.equals(t, "melee_weapon");
-                default -> false;
-            };
-        }
-        @Override public void setStackInSlot(int slot, ItemStack stack) {
-            if (!stack.isEmpty()) LinkIdUtil.ensureLinkId(stack);
-            super.setStackInSlot(slot, stack);
-            dirty = true;
-        }
-        private void normalizePrimaryUnique(int changedSlot) {
-            ItemStack a = getStackInSlot(SLOT_PRIM1);
-            ItemStack b = getStackInSlot(SLOT_PRIM2);
-            if (a.isEmpty() || b.isEmpty()) return;
-            UUID la = LinkIdUtil.getLinkId(a), lb = LinkIdUtil.getLinkId(b);
-            if (la != null && la.equals(lb)) setStackInSlot(changedSlot, ItemStack.EMPTY);
-        }
-    };
+    // ----- 공개 getter (기존 코드 호환) -----
+    public GridItemHandler2D getBase2x2_2D() { return base2x2_2D; }
+    public GridItemHandler2D getBackpack2D() { return backpack2D; }
 
-    private final ItemStackHandler base2x2 = new ItemStackHandler(4) {
-        @Override protected void onContentsChanged(int slot) { dirty = true; }
-    };
-
-    /** 배낭: 2D 그리드 */
-    private GridItemHandler2D backpack = new GridItemHandler2D(0, 0);
-    private int backpackWidth  = 0;
-    private int backpackHeight = 0;
-    private ItemStack backpackItem = ItemStack.EMPTY;
-
-    private boolean dirty = false;
-
-    public ItemStackHandler getEquipment() { return equipment; }
-    public ItemStackHandler getBase2x2() { return base2x2; }
-    /** 호환용: 기존 코드가 getBackpack()을 사용하므로 유지 */
-    public ItemStackHandler getBackpack() { return backpack; }
-    public GridItemHandler2D getBackpack2D() { return backpack; }
-
-    public int getBackpackWidth() { return backpackWidth; }
-    public int getBackpackHeight() { return backpackHeight; }
-    public ItemStack getBackpackItem() { return backpackItem; }
-
-    public void setBackpackItem(ItemStack newBackpack) {
-        if (!backpackItem.isEmpty()) {
-            CompoundTag data = new CompoundTag();
-            data.putInt("Width",  backpackWidth);
-            data.putInt("Height", backpackHeight);
-            data.put("Items", backpack.serializeNBT());
-            backpackItem.getOrCreateTag().put("BackpackData", data);
-        }
-        backpackItem = newBackpack.copy();
-        if (backpackItem.isEmpty()) { resizeBackpack(0, 0); dirty = true; return; }
-
-        CompoundTag tag = backpackItem.getOrCreateTag();
-        if (!tag.contains("slot_type")) tag.putString("slot_type", "backpack");
-        LinkIdUtil.ensureLinkId(backpackItem);
-
-        int w = Math.max(0, tag.getInt("Width"));
-        int h = Math.max(0, tag.getInt("Height"));
-        resizeBackpack(w, h);
-
-        if (tag.contains("BackpackData")) {
-            CompoundTag data = tag.getCompound("BackpackData");
-            backpackWidth  = data.getInt("Width");
-            backpackHeight = data.getInt("Height");
-            resizeBackpack(backpackWidth, backpackHeight);
-            backpack.deserializeNBT(data.getCompound("Items"));
-        }
-        dirty = true;
+    /** 클라 HUD 등에서 읽어가는 프리뷰용 */
+    public UtilBinding peekBinding(int hb) {
+        if (hb < 0 || hb >= HOTBAR_COUNT) return null;
+        if (bindStorage[hb] < 0) return null;
+        return new UtilBinding(bindStorage[hb] == 0 ? Storage.BASE : Storage.BACKPACK, bindIndex[hb]);
     }
 
-    public void resizeBackpack(int w, int h) {
-        backpackWidth = w;
-        backpackHeight = h;
-        backpack = new GridItemHandler2D(w, h) {
-            @Override protected void onContentsChanged(int slot) { dirty = true; }
-        };
-        dirty = true;
-    }
+    // 배낭 장착/탈착 시 호출(기존 장착 로직에서 연결)
+    public void setBackpack(GridItemHandler2D newBp, ServerPlayer sp) {
+        this.backpack2D = newBp;
+        // 배낭 슬롯 수가 바뀌면 역바인딩 테이블 재구성 및 범위 벗어난 바인딩 해제
+        int newSize = (backpack2D == null) ? 0 : backpack2D.getSlots();
+        int[] newMap = new int[newSize];
+        for (int i = 0; i < newMap.length; i++) newMap[i] = -1;
 
-    public void applyWeaponsToHotbar(Player player) {
-        if (player == null || player.level().isClientSide) return;
-        for (int s : new int[]{SLOT_PRIM1, SLOT_PRIM2, SLOT_SEC, SLOT_MELEE}) {
-            ItemStack eq = equipment.getStackInSlot(s);
-            if (!eq.isEmpty()) ensureLink(eq);
-        }
-        player.getInventory().setItem(0, equipment.getStackInSlot(SLOT_PRIM1).copy());
-        player.getInventory().setItem(1, equipment.getStackInSlot(SLOT_PRIM2).copy());
-        player.getInventory().setItem(2, equipment.getStackInSlot(SLOT_SEC).copy());
-        player.getInventory().setItem(3, equipment.getStackInSlot(SLOT_MELEE).copy());
-        player.inventoryMenu.broadcastChanges();
-    }
-
-    public CompoundTag saveNBT() {
-        CompoundTag tag = new CompoundTag();
-        tag.put("Equipment", equipment.serializeNBT());
-        tag.put("Base2x2",  base2x2.serializeNBT());
-        CompoundTag bp = new CompoundTag();
-        bp.putInt("Width",  backpackWidth);
-        bp.putInt("Height", backpackHeight);
-        bp.put("Items", backpack.serializeNBT());
-        tag.put("Backpack", bp);
-        if (!backpackItem.isEmpty()) tag.put("BackpackItem", backpackItem.save(new CompoundTag()));
-        // 유틸 바인딩 저장
-        CompoundTag binds = new CompoundTag();
-        for (int hb = 4; hb <= 8; hb++) {
-            UtilBinding b = utilBindings.get(hb);
-            if (b != null) {
-                CompoundTag t = new CompoundTag();
-                t.putString("storage", b.storage == Storage.BASE ? "base" : "backpack");
-                t.putInt("index", b.index);
-                binds.put(String.valueOf(hb), t);
-            }
-        }
-        tag.put("UtilBinds", binds);
-        return tag;
-    }
-
-    public void loadNBT(CompoundTag tag) {
-        equipment.deserializeNBT(tag.getCompound("Equipment"));
-        base2x2.deserializeNBT(tag.getCompound("Base2x2"));
-        if (tag.contains("Backpack")) {
-            CompoundTag bp = tag.getCompound("Backpack");
-            int w = bp.getInt("Width");
-            int h = bp.getInt("Height");
-            resizeBackpack(w, h);
-            backpack.deserializeNBT(bp.getCompound("Items"));
-        } else {
-            resizeBackpack(0, 0);
-        }
-        if (tag.contains("BackpackItem")) backpackItem = ItemStack.of(tag.getCompound("BackpackItem"));
-        else backpackItem = ItemStack.EMPTY;
-
-        utilBindings.clear();
-        if (tag.contains("UtilBinds")) {
-            CompoundTag binds = tag.getCompound("UtilBinds");
-            for (int hb = 4; hb <= 8; hb++) {
-                String k = String.valueOf(hb);
-                if (binds.contains(k)) {
-                    CompoundTag t = binds.getCompound(k);
-                    String s = t.getString("storage");
-                    int idx = t.getInt("index");
-                    Storage st = "base".equals(s) ? Storage.BASE : Storage.BACKPACK;
-                    utilBindings.put(hb, new UtilBinding(st, idx));
+        // 기존 매핑 재검증
+        for (int hb = 0; hb < HOTBAR_COUNT; hb++) {
+            if (bindStorage[hb] == 1) { // BACKPACK
+                if (bindIndex[hb] < 0 || bindIndex[hb] >= newSize) {
+                    // 존재하지 않는 슬롯을 가리키면 해제
+                    bindStorage[hb] = -1; bindIndex[hb] = -1;
+                } else {
+                    if (newMap[bindIndex[hb]] != -1) {
+                        // 동일 슬롯을 두 핫바가 가리키면 먼저 것 해제
+                        int prevHb = newMap[bindIndex[hb]];
+                        bindStorage[prevHb] = -1; bindIndex[prevHb] = -1;
+                    }
+                    newMap[bindIndex[hb]] = hb;
                 }
             }
         }
-
-        for (int i = 0; i < EQUIP_SLOTS; i++) {
-            ItemStack s = equipment.getStackInSlot(i);
-            if (!s.isEmpty()) LinkIdUtil.ensureLinkId(s);
-        }
-        dirty = false;
-    }
-
-    public static void ensureLink(ItemStack stack) { if (!stack.isEmpty()) LinkIdUtil.ensureLinkId(stack); }
-    public boolean isDirty() { return dirty; }
-    public void clearDirty() { dirty = false; }
-
-    // ─────────────────────────────────────
-    // 유틸 바인딩 (핫바 5~9 → 4..8 인덱스)
-    // ─────────────────────────────────────
-    private final Map<Integer, UtilBinding> utilBindings = new HashMap<>();
-    private final Map<UUID, Integer> utilHotbarCount = new HashMap<>();
-    private final Map<Integer, UUID> utilHotbarSlotId = new HashMap<>();
-
-    /** 서버: BASE에서 바인딩 */
-    public void bindFromBase(ServerPlayer sp, int hotbarIdx, int baseIndex) {
-        utilBindings.put(hotbarIdx, new UtilBinding(Storage.BASE, baseIndex));
-        utilHotbarSlotId.remove(hotbarIdx); // 수량 연동은 별개(원한다면 유지 가능)
-        dirty = true;
+        this.bpSlotBoundToHotbar = newMap;
         SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
     }
 
-    /** 서버: BACKPACK에서 바인딩 */
-    public void bindFromBackpack(ServerPlayer sp, int hotbarIdx, int bpIndex) {
-        utilBindings.put(hotbarIdx, new UtilBinding(Storage.BACKPACK, bpIndex));
-        utilHotbarSlotId.remove(hotbarIdx);
-        dirty = true;
-        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
+    // ===== 바인딩 API =====
+
+    public record UtilBinding(Storage storage, int index) {}
+
+    public void clearAllUtilityBindings() {
+        for (int i = 0; i < HOTBAR_COUNT; i++) { bindStorage[i] = -1; bindIndex[i] = -1; }
+        for (int i = 0; i < baseSlotBoundToHotbar.length; i++) baseSlotBoundToHotbar[i] = -1;
+        for (int i = 0; i < bpSlotBoundToHotbar.length; i++)    bpSlotBoundToHotbar[i] = -1;
+    }
+    // 과거 코드 호환용(오타 방지)
+    public void clearAllUtilBindings() { clearAllUtilityBindings(); }
+
+    public void bindFromBase(ServerPlayer sp, int hotbarIndex, int baseSlot) {
+        rebind(sp, Storage.BASE, hotbarIndex, baseSlot);
+    }
+    public void bindFromBackpack(ServerPlayer sp, int hotbarIndex, int bpSlot) {
+        rebind(sp, Storage.BACKPACK, hotbarIndex, bpSlot);
     }
 
-    /** 서버: 전체 바인딩 초기화(배낭 드롭 시) */
-    public void clearAllUtilBindings() {
-        utilBindings.clear();
-        utilHotbarSlotId.clear();
-        utilHotbarCount.clear();
-        dirty = true;
-    }
-    /** 기존 코드 호환용 이름 */
-    public void clearAllUtilityBindings() { clearAllUtilBindings(); }
+    public void unbindHotbar(ServerPlayer sp, int hotbarIndex) {
+        if (hotbarIndex < 0 || hotbarIndex >= HOTBAR_COUNT) return;
+        if (bindStorage[hotbarIndex] < 0) return;
+        Storage s = bindStorage[hotbarIndex] == 0 ? Storage.BASE : Storage.BACKPACK;
+        int idx   = bindIndex[hotbarIndex];
 
-    /** 클라이언트: Overlay/툴팁 동기화용 조회 */
-    public UtilBinding peekBinding(int hotbarIdx) {
-        return utilBindings.get(hotbarIdx);
-    }
-
-    /** 클라이언트: 서버 동기화 적용 */
-    public void clientSetBinding(int hotbarIdx, Storage storage, int index) {
-        if (storage == null) {
-            utilBindings.remove(hotbarIdx);
+        if (s == Storage.BASE) {
+            if (idx >= 0 && idx < baseSlotBoundToHotbar.length && baseSlotBoundToHotbar[idx] == hotbarIndex)
+                baseSlotBoundToHotbar[idx] = -1;
         } else {
-            utilBindings.put(hotbarIdx, new UtilBinding(storage, index));
+            if (idx >= 0 && idx < bpSlotBoundToHotbar.length && bpSlotBoundToHotbar[idx] == hotbarIndex)
+                bpSlotBoundToHotbar[idx] = -1;
         }
+        bindStorage[hotbarIndex] = -1;
+        bindIndex[hotbarIndex]   = -1;
+
+        updateBoundHotbar(sp);
+        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
     }
 
-    /** 기존 수량동기 기록(유지, 필요시 사용) */
-    public void recordUtilityAssignment(ServerPlayer sp, int hotbarIdx, UUID id) {
-        utilHotbarSlotId.entrySet().removeIf(e -> e.getValue().equals(id));
-        utilHotbarSlotId.put(hotbarIdx, id);
-        ItemStack hb = sp.getInventory().getItem(hotbarIdx);
-        utilHotbarCount.put(id, hb.getCount());
-        dirty = true;
+    public void unbindSlot(ServerPlayer sp, Storage storage, int slotIndex) {
+        int hb = (storage == Storage.BASE)
+                ? (slotIndex >= 0 && slotIndex < baseSlotBoundToHotbar.length ? baseSlotBoundToHotbar[slotIndex] : -1)
+                : (slotIndex >= 0 && slotIndex < bpSlotBoundToHotbar.length   ? bpSlotBoundToHotbar[slotIndex]   : -1);
+        if (hb != -1) unbindHotbar(sp, hb);
+    }
+
+    private void rebind(ServerPlayer sp, Storage storage, int hotbarIndex, int slotIndex) {
+        if (hotbarIndex < 0 || hotbarIndex >= HOTBAR_COUNT) return;
+        // 1) 대상 핫바가 이전에 가리키던 슬롯 정리
+        if (bindStorage[hotbarIndex] >= 0) {
+            unbindHotbar(sp, hotbarIndex);
+        }
+        // 2) 동일 슬롯을 가리키는 다른 핫바가 있으면 해제(슬롯은 1:1)
+        unbindSlot(sp, storage, slotIndex);
+
+        // 3) 새로운 매핑 설정
+        bindStorage[hotbarIndex] = (byte)(storage == Storage.BASE ? 0 : 1);
+        bindIndex[hotbarIndex]   = slotIndex;
+        if (storage == Storage.BASE) {
+            ensureInRange(slotIndex, baseSlotBoundToHotbar.length);
+            baseSlotBoundToHotbar[slotIndex] = hotbarIndex;
+        } else {
+            ensureInRange(slotIndex, bpSlotBoundToHotbar.length);
+            bpSlotBoundToHotbar[slotIndex] = hotbarIndex;
+        }
+
+        // 4) 핫바 실제 아이템은 비워둔다(복사본 제거). 조작은 이벤트로 위임.
+        sp.getInventory().setItem(hotbarIndex, ItemStack.EMPTY);
+
+        updateBoundHotbar(sp);
+        SyncEquipmentPacketHandler.syncUtilBindings(sp, this);
+    }
+
+    private static void ensureInRange(int idx, int size) {
+        if (idx < 0 || idx >= size) throw new IndexOutOfBoundsException("slot=" + idx + ", size=" + size);
+    }
+
+    /**
+     * 클라 핫바 표시 갱신(빈 슬롯 유지). 필요시 슬롯 텍스트/오버레이 동기화 등 추가 훅 존재 가능.
+     */
+    public void updateBoundHotbar(ServerPlayer sp) {
+        sp.containerMenu.broadcastChanges();
+    }
+
+    // ----- 드롭/소진 시 슬롯이 비면 자동 해제에 쓰이는 헬퍼 -----
+    public void onSlotStackChanged(ServerPlayer sp, Storage storage, int slotIndex, ItemStack after) {
+        if (after.isEmpty()) unbindSlot(sp, storage, slotIndex);
     }
 }

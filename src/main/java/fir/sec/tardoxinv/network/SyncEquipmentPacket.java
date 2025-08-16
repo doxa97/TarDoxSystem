@@ -26,14 +26,14 @@ public class SyncEquipmentPacket {
                 int w = bp.getInt("Width");
                 int h = bp.getInt("Height");
 
-                // BackpackItem 먼저 반영하여 배낭 칸 아이콘 표시
+                // BackpackItem 먼저 반영(아이콘 표시)
                 CompoundTag it = msg.data.getCompound("BackpackItem");
                 ItemStack vis = it.isEmpty() ? ItemStack.EMPTY : ItemStack.of(it);
-                cap.setBackpackItem(vis.copy()); // 클라 전용 반영 OK
+                cap.setBackpackItem(vis.copy());
 
-                // 크기/내용물 반영(2D 그리드)
+                // 크기/내용 반영
                 cap.resizeBackpack(w, h);
-                cap.getBackpack2D().deserializeNBT(bp.getCompound("Items"));
+                cap.getBackpack().deserializeNBT(bp.getCompound("Items"));
             });
         });
         ctx.get().setPacketHandled(true);
