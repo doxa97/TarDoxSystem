@@ -11,13 +11,15 @@ import net.minecraftforge.network.simple.SimpleChannel;
 
 public class SyncEquipmentPacketHandler {
 
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "2"; // 패킷 테이블 변경 시 버전업
     public static SimpleChannel CHANNEL;
 
     public static void register() {
         CHANNEL = NetworkRegistry.newSimpleChannel(
                 ResourceLocation.fromNamespaceAndPath(TarDoxInv.MODID, "sync_equipment"),
-                () -> PROTOCOL_VERSION, PROTOCOL_VERSION::equals, PROTOCOL_VERSION::equals
+                () -> PROTOCOL_VERSION,
+                PROTOCOL_VERSION::equals,
+                PROTOCOL_VERSION::equals
         );
 
         int id = 0;
@@ -28,20 +30,40 @@ public class SyncEquipmentPacketHandler {
         CHANNEL.registerMessage(id++, RotateCarriedPacket.class,  RotateCarriedPacket::encode,  RotateCarriedPacket::decode,  RotateCarriedPacket::handle);
         CHANNEL.registerMessage(id++, SyncGamerulePacket.class,   SyncGamerulePacket::encode,   SyncGamerulePacket::decode,   SyncGamerulePacket::handle);
         CHANNEL.registerMessage(id++, DropBackpackPacket.class,   DropBackpackPacket::encode,   DropBackpackPacket::decode,   DropBackpackPacket::handle);
-        CHANNEL.registerMessage(id++, SyncUtilBindsPacket.class,  SyncUtilBindsPacket::encode,  SyncUtilBindsPacket::decode,  SyncUtilBindsPacket::handle);
+        CHANNEL.registerMessage(id++, RotateSlotPacket.class,     RotateSlotPacket::encode,     RotateSlotPacket::decode,     RotateSlotPacket::handle);
+    }
+
+    /** 기존 호출 지점 호환용: 지금은 동기화할 추가 페이로드가 없으므로 no-op */
+    public static void syncUtilBindings(ServerPlayer player, PlayerEquipment equipment) {
+        // 필요 시 여기에 전용 패킷 추가
     }
 
     public static void syncToClient(ServerPlayer player, PlayerEquipment equipment) {
         syncBackpackToClient(player, equipment);
-        syncUtilBindings(player, equipment);
     }
 
     public static void syncBackpackToClient(ServerPlayer player, PlayerEquipment equipment) {
         CompoundTag data = new CompoundTag();
+
+        // Backpack(그리드) + BackpackItem
         CompoundTag bp = new CompoundTag();
         bp.putInt("Width",  equipment.getBackpackWidth());
         bp.putInt("Height", equipment.getBackpackHeight());
-        bp.put("Items", equipment.getBackpack2D().serializeNBT());
+
+        // 2D/1D 구현 호환: 리플렉션으로 우선 getBackpack2D, 실패 시 getBackpack (둘 다 없으면 빈 태그)
+        net.minecraft.nbt.CompoundTag itemsNbt = new net.minecraft.nbt.CompoundTag();
+        try {
+            var m2d = equipment.getClass().getMethod("getBackpack2D");
+            var h2d = (net.minecraftforge.items.ItemStackHandler) m2d.invoke(equipment);
+            itemsNbt = h2d.serializeNBT();
+        } catch (Exception ignore) {
+            try {
+                var m1d = equipment.getClass().getMethod("getBackpack");
+                var h1d = (net.minecraftforge.items.ItemStackHandler) m1d.invoke(equipment);
+                itemsNbt = h1d.serializeNBT();
+            } catch (Exception ignored) { }
+        }
+        bp.put("Items", itemsNbt);
         data.put("Backpack", bp);
 
         if (!equipment.getBackpackItem().isEmpty()) {
@@ -51,10 +73,6 @@ public class SyncEquipmentPacketHandler {
         }
 
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncEquipmentPacket(data));
-    }
-
-    public static void syncUtilBindings(ServerPlayer player, PlayerEquipment equipment) {
-        SyncUtilBindsPacket.send(player, equipment);
     }
 
     public static void sendOpenEquipment(int w, int h) {
