@@ -14,6 +14,8 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import fir.sec.tardoxinv.menu.EquipmentMenu;
+
 
 import java.util.List;
 import java.util.Optional;
@@ -137,5 +139,49 @@ public class InventoryOverlayRenderer {
         int tx = ox + hovered.x + 20;
         int ty = oy + hovered.y;
         g.renderTooltip(Minecraft.getInstance().font, lines, Optional.empty(), tx, ty);
+    }
+    private static final int COLOR_OK   = 0x6600FF00; // 초록
+    private static final int COLOR_BAD  = 0x66FF0000; // 빨강
+
+    @SubscribeEvent
+    public static void onScreenRender(ScreenEvent.Render.Post event) {
+        if (!(event.getScreen() instanceof AbstractContainerScreen<?> sc)) return;
+        if (!(sc.getMenu() instanceof EquipmentMenu menu)) return;
+
+        // 커서에 든 아이템이 있어야만 표시
+        ItemStack carried = menu.getCarried();
+        if (carried == null || carried.isEmpty()) return;
+
+        GuiGraphics gg = event.getGuiGraphics();
+
+        // GUI 좌표 (슬롯 좌표는 상대 좌표이므로 스크린 좌상단을 더해줘야 함)
+        int left = sc.getGuiLeft();
+        int top  = sc.getGuiTop();
+
+        // 블렌딩 켜기 (겹치는 오버레이가 자연스럽게 보이도록)
+        RenderSystem.enableBlend();
+
+        for (Slot s : menu.slots) {
+            if (!(s instanceof GridSlot gs)) continue;
+
+            // 앵커 칸만 하이라이트 (보조 칸은 표시하지 않음)
+            // 핸들러 확인
+            if (!(gs.getItemHandler() instanceof GridItemHandler2D gh)) continue;
+            int anchor = gs.getGridIndex();
+            if (!gh.isAnchor(anchor)) {
+                // 비어있는 앵커 후보도 오버레이에 포함하려면 위 조건을 빼고 canPlaceAt만 검사하면 됨.
+                // 여기서는 "앵커 칸"만 시각화한다는 기존 의도에 따라 anchor만 표시.
+            }
+
+            boolean can = gh.canPlaceAt(anchor, carried);
+
+            int x = left + s.x;
+            int y = top  + s.y;
+            int w = 16, h = 16;
+
+            gg.fill(x, y, x + w, y + h, can ? COLOR_OK : COLOR_BAD);
+        }
+
+        RenderSystem.disableBlend();
     }
 }
