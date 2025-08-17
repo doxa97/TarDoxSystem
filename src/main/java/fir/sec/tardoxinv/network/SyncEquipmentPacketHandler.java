@@ -82,4 +82,37 @@ public class SyncEquipmentPacketHandler {
     public static void syncGamerule(ServerPlayer player, boolean useCustom) {
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncGamerulePacket(useCustom));
     }
+
+    // SyncEquipmentPacketHandler.java 내부에 추가
+    public static void openEquipmentScreen(net.minecraft.server.level.ServerPlayer sp, int w, int h) {
+        final int fw = Math.max(0, w);
+        final int fh = Math.max(0, h);
+
+        net.minecraftforge.network.NetworkHooks.openScreen(
+                sp,
+                new net.minecraft.world.MenuProvider() {
+                    @Override
+                    public net.minecraft.network.chat.Component getDisplayName() {
+                        // 타이틀은 빈 문자열로(원하면 바꿔도 됨)
+                        return net.minecraft.network.chat.Component.empty();
+                    }
+
+                    @Override
+                    public net.minecraft.world.inventory.AbstractContainerMenu createMenu(
+                            int id,
+                            net.minecraft.world.entity.player.Inventory inv,
+                            net.minecraft.world.entity.player.Player ply
+                    ) {
+                        // 서버 측 컨테이너 생성
+                        return new fir.sec.tardoxinv.menu.EquipmentMenu(id, inv, fw, fh);
+                    }
+                },
+                // 클라이언트로 보낼 추가 데이터(FriendlyByteBuf)
+                buf -> {
+                    buf.writeVarInt(fw);
+                    buf.writeVarInt(fh);
+                }
+        );
+    }
+
 }

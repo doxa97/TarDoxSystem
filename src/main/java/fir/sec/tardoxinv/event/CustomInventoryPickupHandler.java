@@ -3,6 +3,7 @@ package fir.sec.tardoxinv.event;
 import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
@@ -13,11 +14,9 @@ import net.minecraftforge.fml.common.Mod;
 
 /**
  * 습득 우선순위:
- *   1) 기본 2x2
- *   2) 배낭
- *   3) 둘 다 실패 → 바닐라(땅에 남음)
- *
- * 서버에서만 실제 삽입/동기화 수행.
+ * 1) "배낭 아이템"이면: 빈 배낭 장착칸에 장착 + 내부 복원 (핫바로 흡수 금지)
+ * 2) 일반 아이템이면: 기본 2x2 → 배낭 그리드
+ * 3) 둘 다 실패 → 바닐라 처리
  */
 @Mod.EventBusSubscriber(bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class CustomInventoryPickupHandler {
@@ -28,40 +27,71 @@ public class CustomInventoryPickupHandler {
         if (!(p instanceof ServerPlayer sp)) return;
 
         ItemEntity ie = e.getItem();
-        ItemStack drop = ie.getItem();
-        if (drop.isEmpty()) return;
+        ItemStack stack = ie.getItem();
+        if (stack.isEmpty()) return;
 
         sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
-            // 1) 기본 2x2 먼저
-            GridItemHandler2D base = eq.getBase2x2();
-            int idx = findFirstFit(base, drop);
-            if (idx >= 0) {
-                base.insertItem2D(idx, drop.copy(), false);
+            // 1) 배낭 아이템?
+            if (isBackpackItem(stack)) {
+                // 이미 배낭 착용 중이면: 기본/배낭 그리드로 삽입 시도 (장착칸 중복 금지)
+                if (!eq.getBackpackItem().isEmpty()) {
+                    if (tryInsertInto(eq.getBase2x2(), stack) || tryInsertInto(eq.getBackpack2D(), stack)) {
+                        ie.discard(); e.setCanceled(true); SyncEquipmentPacketHandler.syncToClient(sp, eq);
+                    }
+                    return;
+                }
+
+                // 빈 배낭 장착칸에 장착 + 그리드 복원/생성
+                CompoundTag data = stack.getTag() != null ? stack.getTag().getCompound("BackpackData") : null;
+                int w = (data != null && data.contains("W")) ? data.getInt("W") : Math.max(0, stack.getOrCreateTag().getInt("BackpackW"));
+                int h = (data != null && data.contains("H")) ? data.getInt("H") : Math.max(0, stack.getOrCreateTag().getInt("BackpackH"));
+
+                // 최소 0~32 정도로 클램프
+                w = Math.max(0, Math.min(32, w));
+                h = Math.max(0, Math.min(32, h));
+
+                eq.setBackpackItem(stack.copy());
+                eq.resizeBackpack(w, h);
+
+                if (data != null && data.contains("Items")) {
+                    eq.getBackpack2D().deserializeNBT(data.getCompound("Items")); // 내부 아이템 복원
+                }
+
                 ie.discard();
                 e.setCanceled(true);
+                // 화면 재오픈(새 그리드 적용)
                 SyncEquipmentPacketHandler.syncToClient(sp, eq);
+                SyncEquipmentPacketHandler.openEquipmentScreen(sp, w, h);
                 return;
             }
 
-            // 2) 배낭로
-            if (eq.getBackpackWidth() > 0 && eq.getBackpackHeight() > 0) {
-                GridItemHandler2D bp = eq.getBackpack2D(); // ← new 브랜치 메서드명
-                int id2 = findFirstFit(bp, drop);
-                if (id2 >= 0) {
-                    bp.insertItem2D(id2, drop.copy(), false);
-                    ie.discard();
-                    e.setCanceled(true);
-                    SyncEquipmentPacketHandler.syncToClient(sp, eq);
-                }
+            // 2) 일반 아이템: 기본 2x2 → 배낭
+            if (tryInsertInto(eq.getBase2x2(), stack) || tryInsertInto(eq.getBackpack2D(), stack)) {
+                ie.discard(); e.setCanceled(true); SyncEquipmentPacketHandler.syncToClient(sp, eq);
             }
         });
     }
 
-    private static int findFirstFit(GridItemHandler2D inv, ItemStack st) {
-        if (inv == null || st.isEmpty()) return -1;
-        for (int i = 0; i < inv.getSlots(); i++) {
-            if (inv.canPlaceAt(i, st)) return i;
+    private static boolean tryInsertInto(GridItemHandler2D gh, ItemStack st) {
+        if (gh == null || st.isEmpty()) return false;
+        for (int i = 0; i < gh.getSlots(); i++) {
+            if (gh.canPlaceAt(i, st)) {
+                gh.insertItem2D(i, st.copy(), false);
+                return true;
+            }
         }
-        return -1;
+        return false;
+    }
+
+    /** 배낭 아이템 판정:
+     *  - DropBackpackPacket이 저장한 "BackpackData" NBT 가 있거나,
+     *  - 아이템 NBT에 BackpackW/BackpackH 키가 있거나,
+     *  - (보조) descriptionId 에 "backpack" 포함
+     */
+    private static boolean isBackpackItem(ItemStack st) {
+        var t = st.getTag();
+        if (t != null && (t.contains("BackpackData") || t.contains("BackpackW") || t.contains("BackpackH"))) return true;
+        String id = st.getItem().getDescriptionId().toLowerCase();
+        return id.contains("backpack");
     }
 }
