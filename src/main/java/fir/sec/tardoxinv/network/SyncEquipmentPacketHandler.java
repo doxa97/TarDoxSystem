@@ -49,8 +49,6 @@ public class SyncEquipmentPacketHandler {
         CompoundTag bp = new CompoundTag();
         bp.putInt("Width",  equipment.getBackpackWidth());
         bp.putInt("Height", equipment.getBackpackHeight());
-
-        // 2D/1D 구현 호환: 리플렉션으로 우선 getBackpack2D, 실패 시 getBackpack (둘 다 없으면 빈 태그)
         net.minecraft.nbt.CompoundTag itemsNbt = new net.minecraft.nbt.CompoundTag();
         try {
             var m2d = equipment.getClass().getMethod("getBackpack2D");
@@ -72,8 +70,16 @@ public class SyncEquipmentPacketHandler {
             data.put("BackpackItem", new CompoundTag());
         }
 
+        // 🔹 추가: 장비칸(equipment) 전체도 함께 전송
+        try {
+            var mEq = equipment.getClass().getMethod("getEquipment");
+            var hEq = (net.minecraftforge.items.ItemStackHandler) mEq.invoke(equipment);
+            data.put("Equipment", hEq.serializeNBT());
+        } catch (Exception ignored) { }
+
         CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncEquipmentPacket(data));
     }
+
 
     public static void sendOpenEquipment(int w, int h) {
         CHANNEL.sendToServer(new OpenEquipmentPacket(w, h));

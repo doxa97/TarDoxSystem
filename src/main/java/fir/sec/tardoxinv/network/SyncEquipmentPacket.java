@@ -34,6 +34,9 @@ public class SyncEquipmentPacket {
                 // 크기/내용물 반영(2D 그리드)
                 cap.resizeBackpack(w, h);
                 cap.getBackpack2D().deserializeNBT(bp.getCompound("Items"));
+                if (msg.data.contains("Equipment")) {
+                    cap.getEquipment().deserializeNBT(msg.data.getCompound("Equipment"));
+                }
             });
         });
         ctx.get().setPacketHandled(true);
