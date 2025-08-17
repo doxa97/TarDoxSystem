@@ -40,11 +40,34 @@ public class SyncEquipmentPacketHandler {
 
     public static void syncToClient(ServerPlayer player, PlayerEquipment equipment) {
         CompoundTag data = new CompoundTag();
-        syncBackpackToClient(player, equipment);
+
+        // ① Equipment(장비칸)
         data.put("Equipment", equipment.getEquipment().serializeNBT());
 
-        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncEquipmentPacket(data));
+        // ② Base2x2(기본 2x2)
+        if (equipment.getBase2x2() != null) {
+            data.put("Base2x2", equipment.getBase2x2().serializeNBT());
+        }
+
+        // ③ Backpack (크기 + 내용물)
+        CompoundTag bp = new CompoundTag();
+        bp.putInt("Width",  equipment.getBackpackWidth());
+        bp.putInt("Height", equipment.getBackpackHeight());
+        if (equipment.getBackpack2D() != null) {
+            bp.put("Items", equipment.getBackpack2D().serializeNBT());
+        }
+        data.put("Backpack", bp);
+
+        // ④ BackpackItem (외형/메타)
+        if (!equipment.getBackpackItem().isEmpty()) {
+            data.put("BackpackItem", equipment.getBackpackItem().save(new CompoundTag()));
+        } else {
+            data.put("BackpackItem", new CompoundTag());
+        }
+
+        SyncEquipmentPacketHandler.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncEquipmentPacket(data));
     }
+
 
     public static void syncBackpackToClient(ServerPlayer player, PlayerEquipment equipment) {
         CompoundTag data = new CompoundTag();

@@ -1,6 +1,7 @@
 package fir.sec.tardoxinv.server;
 
 import fir.sec.tardoxinv.GameRuleRegister;
+import fir.sec.tardoxinv.TarDoxInv;
 import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
@@ -15,7 +16,9 @@ import net.minecraftforge.event.entity.item.ItemTossEvent;
 import net.minecraftforge.event.entity.player.EntityItemPickupEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;import net.minecraftforge.eventbus.api.EventPriority;import net.minecraftforge.eventbus.api.EventPriority;
+
+
 
 @net.minecraftforge.fml.common.Mod.EventBusSubscriber
 public class ServerEvents {
@@ -186,35 +189,97 @@ public class ServerEvents {
             m2.invoke(cap, sp);
         } catch (Exception ignore) { }
     }
-    @SubscribeEvent
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onPickup(EntityItemPickupEvent event) {
-        if (event.isCanceled()) return; // 🔹 이미 다른 핸들러가 처리했으면 스킵
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (player.level().isClientSide) return;
 
+        boolean useCustom = player.getServer().getGameRules().getBoolean(GameRuleRegister.USE_CUSTOM_INVENTORY);
+        // ▶ 로그: 게임룰과 엔티티/아이템
+        TarDoxInv.LOGGER.info("[PICKUP] useCustom={} by={} at=({},{},{})",
+                useCustom, player.getScoreboardName(),
+                (int)event.getItem().getX(), (int)event.getItem().getY(), (int)event.getItem().getZ());
+
+        if (!useCustom) return;
+
         ItemEntity itemEnt = event.getItem();
-        ItemStack stack = itemEnt.getItem();
-        if (stack.isEmpty()) return;
+        if (itemEnt == null) return;
 
-        player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
-            GridItemHandler2D base = eq.getBase2x2();     // 프로젝트의 실제 getter 이름에 맞춰주세요
-            GridItemHandler2D pack = eq.getBackpack2D();    // 동일
+        event.setCanceled(true);
 
-            ItemStack remain = stack.copy();
-            if (base != null) remain = base.insertAnywhere(remain, false);
-            if (!remain.isEmpty() && pack != null) remain = pack.insertAnywhere(remain, false);
+        player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
+            ItemStack stack = itemEnt.getItem();
+            if (stack.isEmpty()) return;
 
-            // 일부/전량이 들어갔으면 기본 픽업은 막고, 월드 아이템을 갱신
-            if (remain.getCount() != stack.getCount()) {
-                int picked = stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount());
-                if (remain.isEmpty()) {
-                    itemEnt.discard();                     // 전량 수납 → 월드 아이템 제거
-                } else {
-                    itemEnt.setItem(remain);               // 일부 수납 → 남은 수량만 월드에 유지
+            // ▶ 로그: 처음 들어온 스택 정보 + slot_type
+            String st = (stack.hasTag() ? stack.getTag().getString("slot_type") : "none");
+            TarDoxInv.LOGGER.info("[PICKUP] start id={} x{} slot_type={}", stack.getItem(), stack.getCount(), st);
+
+            int picked = 0;
+            boolean changed = false;
+
+            // 0) 자동 장착 시도
+            if (stack.hasTag() && cap.tryAutoEquipOne(stack)) {
+                stack.shrink(1);
+                picked += 1;
+                changed = true;
+                TarDoxInv.LOGGER.info("[PICKUP] auto-equipped 1 → remain x{}", stack.getCount());
+            } else {
+                TarDoxInv.LOGGER.info("[PICKUP] auto-equip skipped or failed (slot busy or not equipment)");
+            }
+
+            // 1) 2x2 수납
+            if (!stack.isEmpty()) {
+                GridItemHandler2D base = cap.getBase2x2();
+                if (base != null) {
+                    ItemStack before = stack.copy();
+                    ItemStack after = base.insertAnywhere(stack, false);
+                    int diff = before.getCount() - after.getCount();
+                    if (diff > 0) {
+                        picked += diff;
+                        changed = true;
+                        TarDoxInv.LOGGER.info("[PICKUP] base2x2 inserted {} → remain x{}", diff, after.getCount());
+                    }
+                    stack = after;
                 }
-                event.setCanceled(true);
-                player.take(itemEnt, picked);              // 픽업 애니/사운드 처리
+            }
+
+            // 2) 배낭 수납
+            if (!stack.isEmpty()) {
+                GridItemHandler2D pack = cap.getBackpack2D();
+                if (pack != null) {
+                    ItemStack before = stack.copy();
+                    ItemStack after = pack.insertAnywhere(stack, false);
+                    int diff = before.getCount() - after.getCount();
+                    if (diff > 0) {
+                        picked += diff;
+                        changed = true;
+                        TarDoxInv.LOGGER.info("[PICKUP] backpack inserted {} → remain x{}", diff, after.getCount());
+                    }
+                    stack = after;
+                }
+            }
+
+            // 3) 결과 반영
+            if (picked > 0) {
+                if (stack.isEmpty()) {
+                    itemEnt.discard();
+                    TarDoxInv.LOGGER.info("[PICKUP] consumed all (entity discarded), total picked={}", picked);
+                } else {
+                    itemEnt.setItem(stack);
+                    TarDoxInv.LOGGER.info("[PICKUP] partial consume, total picked={}, entity now x{}", picked, stack.getCount());
+                }
+                player.take(itemEnt, picked);
+            } else {
+                TarDoxInv.LOGGER.info("[PICKUP] nothing inserted: item stays on ground (vanilla blocked)");
+            }
+
+            if (changed) {
+                SyncEquipmentPacketHandler.syncToClient(player, cap);
+                TarDoxInv.LOGGER.info("[SYNC] equipment/base/backpack synced to client");
             }
         });
     }
+
+
 }

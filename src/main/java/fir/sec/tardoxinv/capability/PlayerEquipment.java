@@ -382,4 +382,56 @@ public class PlayerEquipment {
         }
         return total;
     }
+    // 픽업 시 아이템 1개를 해당 장비칸으로 '반드시' 장착하려는 헬퍼.
+// 성공 시 true, 실패 시 false 반환. 성공 시 setStackInSlot 내부에서 dirty 플래그 및 link_id 보정이 일어난다.
+    // 픽업 시 아이템 1개를 해당 장비칸으로 장착(빈 칸에만). 성공하면 true.
+    public boolean tryAutoEquipOne(ItemStack stack) {
+        if (stack == null || stack.isEmpty() || !stack.hasTag()) {
+            fir.sec.tardoxinv.TarDoxInv.LOGGER.info("[AUTO-EQUIP] skip: empty/no NBT");
+            return false;
+        }
+
+        String st = stack.getTag().getString("slot_type");
+        fir.sec.tardoxinv.TarDoxInv.LOGGER.info("[AUTO-EQUIP] slot_type={} id={} x{}",
+                st, stack.getItem().toString(), stack.getCount());
+
+        int target = -1;
+        switch (st) {
+            case "headset" -> { if (getEquipment().getStackInSlot(SLOT_HEADSET).isEmpty()) target = SLOT_HEADSET; }
+            case "helmet" -> { if (getEquipment().getStackInSlot(SLOT_HELMET).isEmpty())  target = SLOT_HELMET;  }
+            case "vest" -> { if (getEquipment().getStackInSlot(SLOT_VEST).isEmpty())    target = SLOT_VEST;    }
+            case "primary_weapon" -> {
+                if (getEquipment().getStackInSlot(SLOT_PRIM1).isEmpty()) target = SLOT_PRIM1;
+                else if (getEquipment().getStackInSlot(SLOT_PRIM2).isEmpty()) target = SLOT_PRIM2;
+            }
+            case "secondary_weapon" -> { if (getEquipment().getStackInSlot(SLOT_SEC).isEmpty()) target = SLOT_SEC; }
+            case "melee_weapon" -> { if (getEquipment().getStackInSlot(SLOT_MELEE).isEmpty()) target = SLOT_MELEE; }
+            default -> {
+                fir.sec.tardoxinv.TarDoxInv.LOGGER.info("[AUTO-EQUIP] not an equipment slot_type: {}", st);
+                return false;
+            }
+        }
+
+        if (target < 0) {
+            fir.sec.tardoxinv.TarDoxInv.LOGGER.info("[AUTO-EQUIP] no empty target slot for {}", st);
+            return false;
+        }
+
+        // (참고) isItemValid는 안 막도록, 실제 세팅 직전 정보만 로그
+        fir.sec.tardoxinv.TarDoxInv.LOGGER.info("[AUTO-EQUIP] placing 1x {} into slot {}", st, target);
+
+        ItemStack one = stack.copy();
+        one.setCount(1);
+        getEquipment().setStackInSlot(target, one);
+
+        // 현재 슬롯 스냅샷 찍기
+        fir.sec.tardoxinv.TarDoxInv.LOGGER.info("[AUTO-EQUIP] done: slot {} now has id={} x{}",
+                target,
+                getEquipment().getStackInSlot(target).getItem().toString(),
+                getEquipment().getStackInSlot(target).getCount());
+        return true;
+    }
+
+
+
 }

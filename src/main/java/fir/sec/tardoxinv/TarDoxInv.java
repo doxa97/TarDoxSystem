@@ -14,7 +14,9 @@ import org.slf4j.Logger;
 @Mod(TarDoxInv.MODID)
 public class TarDoxInv {
     public static final String MODID = "tardox";
-    private static final Logger LOGGER = LogUtils.getLogger();
+
+    // ✅ SLF4J 로거로 통일
+    public static final Logger LOGGER = LogUtils.getLogger();
 
     public TarDoxInv() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -28,4 +30,5 @@ public class TarDoxInv {
         GameRuleRegister.register();
         SyncEquipmentPacketHandler.register();
     }
+
 }
