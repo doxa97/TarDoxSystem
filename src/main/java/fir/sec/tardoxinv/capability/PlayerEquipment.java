@@ -73,6 +73,38 @@ public class PlayerEquipment {
     public int getBackpackHeight() { return backpackHeight; }
     public ItemStack getBackpackItem() { return backpackItem; }
 
+    // 무기/장비 아이템을 해당하는 ‘비어있는’ 장비칸에 배치할 수 있는지 판단하고, 가능하면 슬롯 인덱스를 반환(-1 = 불가)
+    public int findEmptyEquipmentSlotFor(ItemStack stack) {
+        if (stack == null || stack.isEmpty() || !stack.hasTag()) return -1;
+        String st = stack.getTag().getString("slot_type");
+        if (st == null) return -1;
+
+        // isItemValid로 한 번 더 검증
+        java.util.function.IntPredicate emptyAndValid = (slot) ->
+                this.getEquipment().getStackInSlot(slot).isEmpty()
+                        && this.getEquipment().isItemValid(slot, stack);
+
+        switch (st) {
+            case "headset":
+                return emptyAndValid.test(SLOT_HEADSET) ? SLOT_HEADSET : -1;
+            case "helmet":
+                return emptyAndValid.test(SLOT_HELMET) ? SLOT_HELMET : -1;
+            case "vest":
+                return emptyAndValid.test(SLOT_VEST) ? SLOT_VEST : -1;
+            case "primary_weapon":
+                if (emptyAndValid.test(SLOT_PRIM1)) return SLOT_PRIM1;
+                if (emptyAndValid.test(SLOT_PRIM2)) return SLOT_PRIM2;
+                return -1;
+            case "secondary_weapon":
+                return emptyAndValid.test(SLOT_SEC) ? SLOT_SEC : -1;
+            case "melee_weapon":
+                return emptyAndValid.test(SLOT_MELEE) ? SLOT_MELEE : -1;
+            default:
+                return -1;
+        }
+    }
+
+
     public void setBackpackItem(ItemStack newBackpack) {
         if (!backpackItem.isEmpty()) {
             CompoundTag data = new CompoundTag();

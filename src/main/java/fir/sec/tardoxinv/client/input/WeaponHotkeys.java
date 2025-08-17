@@ -7,7 +7,7 @@ import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.glfw.GLFW;
-
+import fir.sec.tardoxinv.client.ClientState;
 @Mod.EventBusSubscriber(value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class WeaponHotkeys {
 
@@ -15,7 +15,7 @@ public class WeaponHotkeys {
     public static void onKey(InputEvent.Key e) {
         if (e.getAction() != GLFW.GLFW_PRESS) return;
         if (Minecraft.getInstance().screen != null) return; // GUI 열려있으면 무시
-
+        if (!ClientState.USE_CUSTOM_INVENTORY) return;
         int hk = switch (e.getKey()) {
             case GLFW.GLFW_KEY_1 -> 0; // 주1
             case GLFW.GLFW_KEY_2 -> 1; // 주2

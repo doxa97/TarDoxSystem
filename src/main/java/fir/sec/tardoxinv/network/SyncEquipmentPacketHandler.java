@@ -39,7 +39,11 @@ public class SyncEquipmentPacketHandler {
     }
 
     public static void syncToClient(ServerPlayer player, PlayerEquipment equipment) {
+        CompoundTag data = new CompoundTag();
         syncBackpackToClient(player, equipment);
+        data.put("Equipment", equipment.getEquipment().serializeNBT());
+
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new SyncEquipmentPacket(data));
     }
 
     public static void syncBackpackToClient(ServerPlayer player, PlayerEquipment equipment) {

@@ -14,7 +14,7 @@ import net.minecraftforge.network.simple.SimpleChannel;
 
 import java.util.Optional;
 import java.util.function.Supplier;
-
+import fir.sec.tardoxinv.GameRuleRegister;
 /** 숫자키 1~4 → 서버로 무기 슬롯 활성화 요청 (0=주1,1=주2,2=보조,3=근접) */
 public class WeaponHotkeyPacket {
 
@@ -47,7 +47,14 @@ public class WeaponHotkeyPacket {
     public static void handle(WeaponHotkeyPacket pkt, Supplier<NetworkEvent.Context> ctx) {
         ctx.get().enqueueWork(() -> {
             ServerPlayer sp = ctx.get().getSender();
-            if (sp == null) return;
+            if (sp == null) { ctx.get().setPacketHandled(true); return; }
+
+            // ✅ 커스텀 인벤토리 OFF면 아무 것도 하지 않음 (바닐라 유지)
+            if (!sp.getServer().getGameRules().getBoolean(GameRuleRegister.USE_CUSTOM_INVENTORY)) {
+                ctx.get().setPacketHandled(true);
+                return;
+            }
+
 
             sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
                 int equipIndex = switch (pkt.kind) {
