@@ -1,15 +1,18 @@
 package fir.sec.tardoxinv.server;
 
 import fir.sec.tardoxinv.GameRuleRegister;
+import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.capability.ModCapabilities;
 import fir.sec.tardoxinv.capability.PlayerEquipment;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.item.ItemTossEvent;
+import net.minecraftforge.event.entity.player.EntityItemPickupEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -182,5 +185,35 @@ public class ServerEvents {
             var m2 = cap.getClass().getMethod("tickMirrorUtilityHotbar", ServerPlayer.class);
             m2.invoke(cap, sp);
         } catch (Exception ignore) { }
+    }
+    @SubscribeEvent
+    public static void onPickup(EntityItemPickupEvent event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+        if (player.level().isClientSide) return;
+
+        ItemEntity itemEnt = event.getItem();
+        ItemStack stack = itemEnt.getItem();
+        if (stack.isEmpty()) return;
+
+        player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
+            GridItemHandler2D base = eq.getBase2x2();     // 프로젝트의 실제 getter 이름에 맞춰주세요
+            GridItemHandler2D pack = eq.getBackpack2D();    // 동일
+
+            ItemStack remain = stack.copy();
+            if (base != null) remain = base.insertAnywhere(remain, false);
+            if (!remain.isEmpty() && pack != null) remain = pack.insertAnywhere(remain, false);
+
+            // 일부/전량이 들어갔으면 기본 픽업은 막고, 월드 아이템을 갱신
+            if (remain.getCount() != stack.getCount()) {
+                int picked = stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount());
+                if (remain.isEmpty()) {
+                    itemEnt.discard();                     // 전량 수납 → 월드 아이템 제거
+                } else {
+                    itemEnt.setItem(remain);               // 일부 수납 → 남은 수량만 월드에 유지
+                }
+                event.setCanceled(true);
+                player.take(itemEnt, picked);              // 픽업 애니/사운드 처리
+            }
+        });
     }
 }

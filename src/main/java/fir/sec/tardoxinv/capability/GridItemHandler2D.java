@@ -113,15 +113,15 @@ public class GridItemHandler2D extends ItemStackHandler {
         int sw = stackW(stack), sh = stackH(stack);
         if (sx + sw > w || sy + sh > h) return false;
 
-        // 🔧 스테일 커버리지 무시
+        // 대상 앵커에 이미 다른 아이템이 있으면, 배치 자체는 '수동'일 때만 의미가 있으므로
+        // 여기서는 단순히 겹침만 검사하고, 치환 여부는 setStackInSlot에서만 일어남.
         for (int dy = 0; dy < sh; dy++) {
             for (int dx = 0; dx < sw; dx++) {
                 int i = xyToIndex(sx + dx, sy + dy);
                 int a = coveredBy[i];
                 if (a != -1 && a != index) {
-                    // 해당 앵커가 실제 스택이 없으면 유령 점유 → 무시
-                    if (super.getStackInSlot(a).isEmpty()) continue;
-                    return false;
+                    if (super.getStackInSlot(a).isEmpty()) continue; // 유령 점유 무시
+                    return false; // 다른 앵커의 영역과 겹침
                 }
             }
         }
@@ -238,22 +238,49 @@ public class GridItemHandler2D extends ItemStackHandler {
     @Override
     public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
         if (stack.isEmpty() || !inBounds(slot)) return ItemStack.EMPTY;
-        purgeStaleCoverage(); // 🔧
+        purgeStaleCoverage(); // 유령 점유 청소
 
-        int anchor = slot;    // 🔧 이 슬롯을 앵커로 고정
-        if (!canPlaceAt(anchor, stack)) return stack;
-        if (simulate) return ItemStack.EMPTY;
+        // 🔁 자동 삽입은 슬롯 하나에 고정하지 않고, 같은 핸들러 전체 앵커를 스캔
+        int anchor = findAnchorForAutoInsert(stack);
+        if (anchor == -1) {
+            // 이 스토리지에는 더 이상 들어갈 곳이 없음 → 남은 스택 그대로 반환
+            return stack;
+        }
 
         ItemStack cur = super.getStackInSlot(anchor);
-        if (!cur.isEmpty()) clearFootprint(anchor, cur);
 
-        ItemStack copy = stack.copy();
-        ensureLinkId(copy);
-        super.setStackInSlot(anchor, copy);
-        markFootprint(anchor, copy);
-        onContentsChanged(anchor);
-        return ItemStack.EMPTY;
+        // 1) 합치기
+        if (!cur.isEmpty() && canStacksMerge(cur, stack)) {
+            int max = Math.min(cur.getMaxStackSize(), stack.getMaxStackSize());
+            int canMove = Math.min(stack.getCount(), max - cur.getCount());
+            if (canMove <= 0) return stack;
+
+            if (!simulate) {
+                cur.grow(canMove);
+                super.setStackInSlot(anchor, cur);
+                // 합치기는 동일 풋프린트 전제 → 마킹 유지
+                onContentsChanged(anchor);
+            }
+            ItemStack remain = stack.copy();
+            remain.shrink(canMove);
+            return remain;
+        }
+
+        // 2) 새 배치 (앵커가 비어 있는 경우)
+        if (cur.isEmpty()) {
+            if (simulate) return ItemStack.EMPTY;
+            ItemStack copy = stack.copy();
+            ensureLinkId(copy);
+            super.setStackInSlot(anchor, copy);
+            markFootprint(anchor, copy);
+            onContentsChanged(anchor);
+            return ItemStack.EMPTY;
+        }
+
+        // 이 줄은 일반적으로 도달하지 않지만, 안전상 남김
+        return stack;
     }
+
 
 
     /** extract: 앵커에서만 추출, 0되면 발자국 해제 */
@@ -287,6 +314,59 @@ public class GridItemHandler2D extends ItemStackHandler {
         }
         return out;
     }
+    // 같은 아이템 + 같은 태그 + 스택 여유 + (선택) 같은 풋프린트일 때만 merge 허용
+    private boolean canStacksMerge(ItemStack anchorStack, ItemStack incoming) {
+        if (anchorStack.isEmpty() || incoming.isEmpty()) return false;
+        if (!sameItemSameTagsIgnoringLinkId(anchorStack, incoming)) return false;
+
+        // 스택 최대치 여유
+        int max = Math.min(anchorStack.getMaxStackSize(), incoming.getMaxStackSize());
+        if (anchorStack.getCount() >= max) return false;
+
+        // 다칸 아이템은 같은 풋프린트일 때만 합치기 허용
+        int aw = stackW(anchorStack), ah = stackH(anchorStack);
+        int iw = stackW(incoming),    ih = stackH(incoming);
+        return (aw == iw) && (ah == ih);
+    }
+
+    /** 자동 삽입 시: 같은 스토리지 내에서 '합치기 자리 → 빈 앵커' 순으로 탐색 */
+    private int findAnchorForAutoInsert(ItemStack stack) {
+        // 1) 합치기 우선 탐색
+        for (int idx = 0; idx < getSlots(); idx++) {
+            ItemStack cur = super.getStackInSlot(idx);
+            if (!cur.isEmpty() && canStacksMerge(cur, stack)) {
+                // 풋프린트가 겹치지 않는지도 검사
+                if (canPlaceAt(idx, cur)) return idx;
+            }
+        }
+        // 2) 빈 앵커 탐색
+        for (int idx = 0; idx < getSlots(); idx++) {
+            if (!super.getStackInSlot(idx).isEmpty()) continue;
+            if (canPlaceAt(idx, stack)) return idx;
+        }
+        return -1;
+    }
+
+// import net.minecraft.nbt.CompoundTag; 상단에 있어야 합니다.
+
+    /** 두 스택이 같은 아이템이며, NBT 비교 시 link_id만 무시하고 동일한지 */
+    private static boolean sameItemSameTagsIgnoringLinkId(ItemStack a, ItemStack b) {
+        if (!ItemStack.isSameItem(a, b)) return false;
+        CompoundTag ta = a.getTag(), tb = b.getTag();
+        if (ta == tb) return true;
+
+        // null/빈 태그 케이스 정리
+        if (ta == null || ta.isEmpty()) ta = new CompoundTag();
+        if (tb == null || tb.isEmpty()) tb = new CompoundTag();
+
+        ta = ta.copy();
+        tb = tb.copy();
+        ta.remove("link_id");
+        tb.remove("link_id");
+        return ta.equals(tb);
+    }
+
+
 
 
     /* ─────────────── 추가 유틸 (호환용) ─────────────── */
@@ -323,5 +403,51 @@ public class GridItemHandler2D extends ItemStackHandler {
             }
         }
     }
+    /** 같은 핸들러 전체를 대상으로 자동 삽입(합치기 우선 → 빈 앵커). 남은 스택 반환 */
+    public ItemStack insertAnywhere(ItemStack stack, boolean simulate) {
+        if (stack.isEmpty()) return ItemStack.EMPTY;
+        purgeStaleCoverage();
+
+        // 1) 합치기 자리 탐색
+        for (int idx = 0; idx < getSlots(); idx++) {
+            ItemStack cur = super.getStackInSlot(idx);
+            if (cur.isEmpty()) continue;
+            if (!canStacksMerge(cur, stack)) continue;
+            // 합쳐 넣기
+            int max = Math.min(cur.getMaxStackSize(), stack.getMaxStackSize());
+            int canMove = Math.min(stack.getCount(), max - cur.getCount());
+            if (canMove <= 0) continue;
+
+            if (!simulate) {
+                cur.grow(canMove);
+                super.setStackInSlot(idx, cur);
+                // 풋프린트는 동일 크기 전제이므로 변화 없음
+                onContentsChanged(idx);
+            }
+            ItemStack remain = stack.copy();
+            remain.shrink(canMove);
+            if (remain.isEmpty()) return ItemStack.EMPTY;
+            stack = remain; // 남은 양으로 계속 진행
+        }
+
+        // 2) 빈 앵커 탐색
+        for (int idx = 0; idx < getSlots(); idx++) {
+            if (!super.getStackInSlot(idx).isEmpty()) continue;
+            if (!canPlaceAt(idx, stack)) continue;
+
+            if (!simulate) {
+                ItemStack copy = stack.copy();
+                ensureLinkId(copy);
+                super.setStackInSlot(idx, copy);
+                markFootprint(idx, copy);
+                onContentsChanged(idx);
+            }
+            return ItemStack.EMPTY; // 전량 배치
+        }
+
+        // 3) 못 넣으면 남김
+        return stack;
+    }
+
 
 }

@@ -119,6 +119,86 @@ public class EquipmentMenu extends AbstractContainerMenu {
         });
     }
 
-    @Override public ItemStack quickMoveStack(Player p, int i){ return ItemStack.EMPTY; }
+    // ── 추가: 플레이어 인벤토리 슬롯 판별
+    private static boolean isPlayerInventorySlot(net.minecraft.world.inventory.Slot s) {
+        return s != null && s.container instanceof net.minecraft.world.entity.player.Inventory;
+    }
+
+    // ── 추가: 플레이어 인벤토리 구간 동적 계산 (start-inclusive, end-exclusive)
+    private int[] getPlayerInvRange() {
+        int min = Integer.MAX_VALUE, max = -1;
+        for (int i = 0; i < this.slots.size(); i++) {
+            net.minecraft.world.inventory.Slot s = this.slots.get(i);
+            if (isPlayerInventorySlot(s)) {
+                if (i < min) min = i;
+                if (i > max) max = i;
+            }
+        }
+        if (min == Integer.MAX_VALUE) return new int[]{-1, -1};
+        return new int[]{min, max + 1};
+    }
+
+    // ── (이미 없다면) 추가: BASE → BACKPACK 자동 라우팅
+    private net.minecraft.world.item.ItemStack autoRouteToGrids(net.minecraft.world.item.ItemStack stack) {
+        if (stack.isEmpty()) return net.minecraft.world.item.ItemStack.EMPTY;
+        net.minecraft.world.item.ItemStack remain = stack;
+
+        if (this.base2x2 != null) {
+            remain = this.base2x2.insertAnywhere(remain, false); // 이전 단계에서 만든 API
+        }
+        if (!remain.isEmpty() && this.backpack != null) {
+            remain = this.backpack.insertAnywhere(remain, false);
+        }
+        return remain;
+    }
+
+    // ── 교체: super.quickMoveStack 호출 제거, 전체 로직 구현
+    @Override
+    public net.minecraft.world.item.ItemStack quickMoveStack(net.minecraft.world.entity.player.Player player, int slotIndex) {
+        net.minecraft.world.item.ItemStack ret = net.minecraft.world.item.ItemStack.EMPTY;
+        if (slotIndex < 0 || slotIndex >= this.slots.size()) return ret;
+
+        net.minecraft.world.inventory.Slot slot = this.slots.get(slotIndex);
+        if (slot == null || !slot.hasItem()) return ret;
+
+        net.minecraft.world.item.ItemStack stack = slot.getItem();
+        net.minecraft.world.item.ItemStack before = stack.copy();
+        ret = before.copy();
+
+        boolean fromPlayerInv = isPlayerInventorySlot(slot);
+
+        if (fromPlayerInv) {
+            // 플레이어 인벤토리 → 우리 그리드(BASE→BACKPACK)
+            net.minecraft.world.item.ItemStack remain = autoRouteToGrids(stack.copy());
+            if (remain.isEmpty()) {
+                slot.set(net.minecraft.world.item.ItemStack.EMPTY);
+            } else {
+                slot.set(remain);
+            }
+            slot.onTake(player, before);
+            return ret;
+        } else {
+            // 우리 그리드 → 플레이어 인벤토리/핫바
+            int[] pr = getPlayerInvRange();
+            if (pr[0] == -1) return net.minecraft.world.item.ItemStack.EMPTY;
+
+            // moveItemStackTo는 [start, end) 구간으로 이동 시도
+            boolean moved = this.moveItemStackTo(stack, pr[0], pr[1], false);
+            if (!moved) return net.minecraft.world.item.ItemStack.EMPTY;
+
+            if (stack.isEmpty()) {
+                slot.set(net.minecraft.world.item.ItemStack.EMPTY);
+            } else {
+                slot.setChanged();
+            }
+            slot.onTake(player, before);
+            return ret;
+        }
+    }
+
+
     @Override public boolean stillValid(Player p){ return true; }
+    // BASE → BACKPACK 순서로 자동 삽입. 남은 스택 반환
+
+
 }
