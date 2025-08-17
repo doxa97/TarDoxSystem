@@ -198,33 +198,29 @@ public class ServerEvents {
         if (stack.isEmpty()) return;
 
         player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
-            // 🔹 배낭 아이템은 특수 처리
+            // ✅ 배낭 아이템
             if (PlayerEquipment.isBackpackItem(stack)) {
-                // 이미 배낭 장착 중이면 '일반 라우팅' 혹은 그대로 두기(정책 선택)
-                if (eq.getBackpack() != null && eq.getBackpack().getSlots() > 0) {
-                    // 배낭이 이미 있음 → 기본/배낭 그리드로 라우팅 시도 (원하면 '그대로 두기'로 바꿀 수 있음)
-                    ItemStack remain = stack.copy();
-                    if (eq.getBase2x2() != null) remain = eq.getBase2x2().insertAnywhere(remain, false);
-                    if (!remain.isEmpty() && eq.getBackpack() != null) remain = eq.getBackpack().insertAnywhere(remain, false);
-                    if (remain.getCount() != stack.getCount()) {
-                        // 일부/전량 수납됨 → 바닐라 픽업 취소
-                        if (remain.isEmpty()) event.getItem().discard();
-                        else event.getItem().setItem(remain);
-                        event.setCanceled(true);
-                        player.take(event.getItem(), stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount()));
-                    }
+                boolean hasBP = eq.getBackpack() != null && eq.getBackpack().getSlots() > 0;
+
+                if (hasBP) {
+                    // 이미 배낭 장착 중 → 절대 주우지 않음 (월드에 남김)
+                    event.getItem().setPickUpDelay(40);
+                    event.setCanceled(true);
+                    return;
+                } else {
+                    // 미장착 → 자동 장착, 핫바 유입 금지
+                    eq.equipBackpackFromItem(stack);
+                    // 월드 아이템 제거 + 바닐라 픽업 취소
+                    event.getItem().discard();
+                    event.setCanceled(true);
+                    // 효과음 표시
+                    player.take(event.getItem(), stack.getCount());
+                    // TODO: 여기서 capability 동기화 패킷 송신(e.g., SyncEquipmentPacket)
                     return;
                 }
-
-                // 배낭 미장착 상태 → 자동 장착 (핫바/바닐라 유입 금지)
-                eq.equipBackpackFromItem(stack);
-                event.getItem().discard();       // 월드에서 제거
-                event.setCanceled(true);         // 바닐라 인벤토리 유입 차단
-                player.take(event.getItem(), stack.getCount()); // 픽업 사운드
-                return;
             }
 
-            // 🔹 그 외 아이템은 기존 라우팅(BASE → BACKPACK)만
+            // ✅ 일반 아이템: BASE → BACKPACK 라우팅만 (바닐라 인벤토리/핫바 사용 안함)
             ItemStack remain = stack.copy();
             if (eq.getBase2x2() != null) remain = eq.getBase2x2().insertAnywhere(remain, false);
             if (!remain.isEmpty() && eq.getBackpack() != null) remain = eq.getBackpack().insertAnywhere(remain, false);
@@ -234,9 +230,11 @@ public class ServerEvents {
                 else event.getItem().setItem(remain);
                 event.setCanceled(true);
                 player.take(event.getItem(), stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount()));
+                // TODO: 동기화 패킷
             }
         });
     }
+
 
     public static void onBackpackUnequipped(ServerPlayer player, fir.sec.tardoxinv.capability.PlayerEquipment eq, ItemStack backpackItem) {
         // 1) 내부 그리드 제거
@@ -254,5 +252,18 @@ public class ServerEvents {
             player.closeContainer();
         }
     }
+    public static void unequipBackpackAndDrop(ServerPlayer player, PlayerEquipment eq) {
+        ItemStack dropStack = eq.unequipBackpackToItem(); // NBT(사이즈/내용물) 포함
+        if (!dropStack.isEmpty()) {
+            ItemEntity drop = new ItemEntity(player.level(), player.getX(), player.getY() + 0.5, player.getZ(), dropStack);
+            drop.setPickUpDelay(40);
+            player.level().addFreshEntity(drop);
+        }
+        if (player.containerMenu instanceof fir.sec.tardoxinv.menu.EquipmentMenu) {
+            player.closeContainer();
+        }
+        // TODO: capability 동기화
+    }
+
 
 }

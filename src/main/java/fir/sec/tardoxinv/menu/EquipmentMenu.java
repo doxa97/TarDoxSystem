@@ -9,6 +9,7 @@ import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
 import net.minecraftforge.network.NetworkHooks;
@@ -168,6 +169,11 @@ public class EquipmentMenu extends AbstractContainerMenu {
     // ── 교체: super.quickMoveStack 호출 제거, 전체 로직 구현
     @Override
     public net.minecraft.world.item.ItemStack quickMoveStack(net.minecraft.world.entity.player.Player player, int slotIndex) {
+        Slot s = this.slots.get(slotIndex);
+        if (s instanceof GridSlot gs && gs.getStorage() == GridSlot.Storage.EQUIPMENT /* or BACKPACK_SLOT */) {
+            // 배낭 장착 슬롯에서 쉬프트-클릭 금지
+            return ItemStack.EMPTY;
+        }
         net.minecraft.world.item.ItemStack ret = net.minecraft.world.item.ItemStack.EMPTY;
         if (slotIndex < 0 || slotIndex >= this.slots.size()) return ret;
 

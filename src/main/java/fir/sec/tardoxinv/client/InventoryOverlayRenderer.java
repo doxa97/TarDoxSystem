@@ -24,6 +24,8 @@ import java.util.Optional;
 public class InventoryOverlayRenderer {
 
     private static final int COLOR_OCCUPIED = 0x33000000; // 아주 옅은 회색(아이콘 가리지 않게)
+    private static final int COLOR_OK   = 0x6600FF00; // 초록
+    private static final int COLOR_BAD  = 0x66FF0000; // 빨강
 
 
     @SubscribeEvent
@@ -143,8 +145,68 @@ public class InventoryOverlayRenderer {
         int ty = oy + hovered.y;
         g.renderTooltip(Minecraft.getInstance().font, lines, Optional.empty(), tx, ty);
     }
-    private static final int COLOR_OK   = 0x6600FF00; // 초록
-    private static final int COLOR_BAD  = 0x66FF0000; // 빨강
+
+    // 1) 아이템/아이콘 "아래"에 그릴 회색 점유 그리드 (Pre)
+    @SubscribeEvent
+    public static void onScreenRenderPre(ScreenEvent.Render.Pre event) {
+        if (!(event.getScreen() instanceof AbstractContainerScreen<?> sc)) return;
+        if (!(sc.getMenu() instanceof EquipmentMenu menu)) return;
+
+        GuiGraphics gg = event.getGuiGraphics();
+        final int left = sc.getGuiLeft();
+        final int top  = sc.getGuiTop();
+
+        RenderSystem.enableBlend();
+        gg.pose().pushPose();
+        gg.pose().translate(0, 0, 50.0f); // 배경 위, 아이콘 아래
+
+        for (Slot s : menu.slots) {
+            if (!(s instanceof GridSlot gs)) continue;
+            if (!(gs.getItemHandler() instanceof GridItemHandler2D gh)) continue;
+            gh.ensureCoverage(); // 재오픈 직후 보장
+
+            int idx = gs.getGridIndex();
+            if (gh.isOccupied(idx)) {
+                int x = left + s.x, y = top + s.y;
+                gg.fill(x, y, x + 16, y + 16, COLOR_OCCUPIED);
+            }
+        }
+
+        gg.pose().popPose();
+        RenderSystem.disableBlend();
+    }
+
+    // 2) 아이콘 "위"에 그릴 초록/빨강 (Post)
+    @SubscribeEvent
+    public static void onScreenRenderPost(ScreenEvent.Render.Post event) {
+        if (!(event.getScreen() instanceof AbstractContainerScreen<?> sc)) return;
+        if (!(sc.getMenu() instanceof EquipmentMenu menu)) return;
+
+        ItemStack carried = menu.getCarried();
+        if (carried == null || carried.isEmpty()) return;
+
+        GuiGraphics gg = event.getGuiGraphics();
+        final int left = sc.getGuiLeft();
+        final int top  = sc.getGuiTop();
+
+        RenderSystem.enableBlend();
+        gg.pose().pushPose();
+        gg.pose().translate(0, 0, 300.0f); // 아이콘 위
+
+        for (Slot s : menu.slots) {
+            if (!(s instanceof GridSlot gs)) continue;
+            if (!(gs.getItemHandler() instanceof GridItemHandler2D gh)) continue;
+            gh.ensureCoverage();
+
+            int anchor = gs.getGridIndex();
+            boolean can = gh.canPlaceAt(anchor, carried);
+            int x = left + s.x, y = top + s.y;
+            gg.fill(x, y, x + 16, y + 16, can ? COLOR_OK : COLOR_BAD);
+        }
+
+        gg.pose().popPose();
+        RenderSystem.disableBlend();
+    }
 
     @SubscribeEvent
     public static void onScreenRender(ScreenEvent.Render.Post event) {

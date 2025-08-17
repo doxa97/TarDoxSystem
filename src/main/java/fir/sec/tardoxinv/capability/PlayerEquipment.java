@@ -1,5 +1,6 @@
 package fir.sec.tardoxinv.capability;
 
+import fir.sec.tardoxinv.item.ModItems;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
 import fir.sec.tardoxinv.util.LinkIdUtil;
 import net.minecraft.nbt.CompoundTag;
@@ -45,9 +46,7 @@ public class PlayerEquipment {
     public static boolean isBackpackItem(ItemStack s) {
         if (s == null || s.isEmpty()) return false;
         CompoundTag t = s.getTag();
-        if (t == null) return false;
-        return t.contains("BackpackW") || t.contains("BackpackH") ||
-                t.contains("BPW") || t.contains("BPH"); // 예비 키
+        return t != null && (t.contains("BackpackW") || t.contains("BackpackH") || t.contains("BackpackInv"));
     }
 
     private static int readBackpackW(ItemStack s) {
@@ -70,14 +69,20 @@ public class PlayerEquipment {
     }
 
     // 실제로 장착: NBT를 절대 건드리지 않고, 그 크기로 핸들러 리사이즈
-    public void equipBackpackFromItem(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) return;
-        int w = readBackpackW(stack);
-        int h = readBackpackH(stack);
-        // 최소 1x1 보정(원하면 0x0 허용 가능)
-        if (w <= 0 || h <= 0) { w = 1; h = 1; }
-        setBackpackSize(w, h);
+    public void equipBackpackFromItem(ItemStack src) {
+        if (src == null || src.isEmpty()) return;
+        int w = Math.max(1, readBPW(src));
+        int h = Math.max(1, readBPH(src));
+
+        this.setBackpackSize(w, h);                 // 0×0 방지
+        CompoundTag tag = src.getTag();
+        if (tag != null && tag.contains("BackpackInv")) {
+            this.getBackpack().deserializeNBT(tag.getCompound("BackpackInv"));
+            this.getBackpack().markCoverageDirty(); // 커버리지 재구축 플래그
+        }
+        this.equippedBackpackItem = src.copy();     // 원본 스택 보관 (후에 드롭용)
     }
+
 
     // 해제: 내부 그리드를 0x0으로
     public void unequipBackpack() {
@@ -414,5 +419,46 @@ public class PlayerEquipment {
             }
         }
         return total;
+    }
+    private ItemStack equippedBackpackItem = ItemStack.EMPTY;
+
+
+
+    private static int readBPW(ItemStack s) { CompoundTag t = s.getTag(); return (t!=null && t.contains("BackpackW"))? Math.max(0,t.getInt("BackpackW")):0; }
+    private static int readBPH(ItemStack s) { CompoundTag t = s.getTag(); return (t!=null && t.contains("BackpackH"))? Math.max(0,t.getInt("BackpackH")):0; }
+
+    private static void writeBPSize(ItemStack s, int w, int h) {
+        CompoundTag t = s.getOrCreateTag();
+        t.putInt("BackpackW", Math.max(0,w));
+        t.putInt("BackpackH", Math.max(0,h));
+    }
+
+    // 배낭 컨텐츠/크기를 아이템 NBT로 저장
+    public void packBackpackToItem(ItemStack target) {
+        if (target == null || target.isEmpty()) return;
+        CompoundTag inv = this.getBackpack().serializeNBT().copy();
+        CompoundTag tag = target.getOrCreateTag();
+        tag.put("BackpackInv", inv);
+        writeBPSize(target, this.getBackpack().getWidth(), this.getBackpack().getHeight());
+    }
+
+    // 아이템 NBT에서 배낭 컨텐츠/크기를 불러와 장착
+
+
+    // 장착 해제(컨텐츠를 아이템에 저장하고 내부 0×0)
+    public ItemStack unequipBackpackToItem() {
+        if (this.getBackpack().getSlots() > 0) {
+            // 보관 중인 아이템 없으면 새 스택 생성(프로젝트의 배낭 Item을 사용)
+            ItemStack out = this.equippedBackpackItem.isEmpty() ? this.equippedBackpackItem = this.equippedBackpackItem.copy() : this.equippedBackpackItem.copy();
+            if (out.isEmpty()) {
+                // TODO: 프로젝트의 배낭 아이템 타입으로 생성 (예: ModItems.BACKPACK.get().getDefaultInstance())
+                out = new ItemStack(ModItems.SMALL_BACKPACK.get());
+            }
+            packBackpackToItem(out);
+            this.setBackpackSize(0, 0);
+            this.equippedBackpackItem = ItemStack.EMPTY;
+            return out;
+        }
+        return ItemStack.EMPTY;
     }
 }

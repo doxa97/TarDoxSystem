@@ -15,6 +15,8 @@ import java.util.UUID;
  */
 public class GridItemHandler2D extends ItemStackHandler {
 
+    private boolean coverageDirty = true;
+
     private int w, h;              // 전체 그리드 크기
     private int[] coveredBy;       // 각 칸을 점유하는 앵커 인덱스(-1: 비점유)
 
@@ -43,7 +45,10 @@ public class GridItemHandler2D extends ItemStackHandler {
         Arrays.fill(this.coveredBy, -1);
         // 내용 리셋 정책. 필요하면 remap 로직을 여기에 추가.
         onLoad();
+        this.coverageDirty = true;
     }
+    // setGridSize 끝이나 deserializeNBT 끝에서 호출/마크
+    public void markCoverageDirty() { this.coverageDirty = true; }
 
     /* ───────────────────── 헬퍼 ───────────────────── */
     private boolean inBounds(int index){ return index >= 0 && index < getSlots(); }
@@ -80,6 +85,7 @@ public class GridItemHandler2D extends ItemStackHandler {
 
         // onLoad()도 불리지만, 혹시 모를 구현 차이를 고려해 한 번 더 안전하게 재구축
         rebuildAnchors();
+        this.coverageDirty = true;
     }
 
     public static int stackW(ItemStack stack) {
@@ -108,6 +114,7 @@ public class GridItemHandler2D extends ItemStackHandler {
 
     /** 경계·겹침 검사: index를 앵커로 stack을 둘 수 있는가 */
     public boolean canPlaceAt(int index, ItemStack stack) {
+        ensureCoverage();
         if (stack.isEmpty() || !inBounds(index)) return false;
         int sx = indexX(index), sy = indexY(index);
         int sw = stackW(stack), sh = stackH(stack);
@@ -377,6 +384,7 @@ public class GridItemHandler2D extends ItemStackHandler {
     }
 
     public boolean isOccupied(int index) {
+        ensureCoverage();
         return inBounds(index) && coveredBy[index] != -1;
     }
 
@@ -447,6 +455,18 @@ public class GridItemHandler2D extends ItemStackHandler {
 
         // 3) 못 넣으면 남김
         return stack;
+    }
+
+    // 커버리지 보장(필요할 때만 비용 발생)
+    public void ensureCoverage() {
+        if (!coverageDirty) return;
+        // 스택이 하나라도 있으면 rebuildAnchors 실행
+        boolean any = false;
+        for (int i = 0; i < getSlots(); i++) {
+            if (!super.getStackInSlot(i).isEmpty()) { any = true; break; }
+        }
+        if (any) rebuildAnchors();
+        coverageDirty = false;
     }
 
 
