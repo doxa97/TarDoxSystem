@@ -36,7 +36,7 @@ public class CustomInventoryPickupHandler {
             GridItemHandler2D base = eq.getBase2x2();
             int idx = findFirstFit(base, drop);
             if (idx >= 0) {
-                base.insertItem2D(idx, drop.copy(), false);
+                base.insertItem(idx, drop.copy(), false);
                 ie.discard();
                 e.setCanceled(true);
                 SyncEquipmentPacketHandler.syncToClient(sp, eq);
@@ -48,7 +48,7 @@ public class CustomInventoryPickupHandler {
                 GridItemHandler2D bp = eq.getBackpack2D(); // ← new 브랜치 메서드명
                 int id2 = findFirstFit(bp, drop);
                 if (id2 >= 0) {
-                    bp.insertItem2D(id2, drop.copy(), false);
+                    bp.insertItem(id2, drop.copy(), false);
                     ie.discard();
                     e.setCanceled(true);
                     SyncEquipmentPacketHandler.syncToClient(sp, eq);
