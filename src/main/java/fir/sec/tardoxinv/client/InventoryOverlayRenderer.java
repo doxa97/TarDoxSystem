@@ -1,9 +1,9 @@
-package fir.sec.tardoxinv.client.overlay;
+package fir.sec.tardoxinv.client;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.client.ui.ClientHotbarBindings;
-import fir.sec.tardoxinv.menu.slot.GridSlot;
+import fir.sec.tardoxinv.menu.GridSlot;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;

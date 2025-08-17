@@ -1,6 +1,6 @@
 package fir.sec.tardoxinv.client.ui;
 
-import fir.sec.tardoxinv.menu.slot.GridSlot;
+import fir.sec.tardoxinv.menu.GridSlot;
 
 import java.util.HashMap;
 import java.util.Map;
