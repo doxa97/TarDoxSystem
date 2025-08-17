@@ -105,6 +105,19 @@ public class EquipmentMenu extends AbstractContainerMenu {
                 addSlot(new GridSlot(backpack, i, bpX + x * SLOT_SIZE, bpY + y * SLOT_SIZE, GridSlot.Storage.BACKPACK));
             }
         }
+        // 배낭 슬롯 추가부
+        GridItemHandler2D bp = this.backpack; // 이미 메뉴가 들고 있는 필드 사용
+
+        if (bp != null && bp.getSlots() > 0) {
+            for (int y = 0; y < bp.getHeight(); y++) {
+                for (int x = 0; x < bp.getWidth(); x++) {
+                    int i = y * bp.getWidth() + x;
+                    addSlot(new GridSlot(bp, i, bpX + x * SLOT_SIZE, bpY + y * SLOT_SIZE, GridSlot.Storage.BACKPACK));
+                }
+            }
+        }
+// bp.getSlots()==0 이면 아무 슬롯도 만들지 않음
+
     }
 
     @Override

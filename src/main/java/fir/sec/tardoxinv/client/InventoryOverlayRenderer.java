@@ -23,6 +23,9 @@ import java.util.Optional;
 @Mod.EventBusSubscriber(value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class InventoryOverlayRenderer {
 
+    private static final int COLOR_OCCUPIED = 0x33000000; // 아주 옅은 회색(아이콘 가리지 않게)
+
+
     @SubscribeEvent
     public static void onRenderPost(ScreenEvent.Render.Post e) {
         if (!(e.getScreen() instanceof AbstractContainerScreen<?> scr)) return;
@@ -148,40 +151,46 @@ public class InventoryOverlayRenderer {
         if (!(event.getScreen() instanceof AbstractContainerScreen<?> sc)) return;
         if (!(sc.getMenu() instanceof EquipmentMenu menu)) return;
 
-        // 커서에 든 아이템이 있어야만 표시
-        ItemStack carried = menu.getCarried();
-        if (carried == null || carried.isEmpty()) return;
-
         GuiGraphics gg = event.getGuiGraphics();
+        final int left = sc.getGuiLeft();
+        final int top  = sc.getGuiTop();
 
-        // GUI 좌표 (슬롯 좌표는 상대 좌표이므로 스크린 좌상단을 더해줘야 함)
-        int left = sc.getGuiLeft();
-        int top  = sc.getGuiTop();
-
-        // 블렌딩 켜기 (겹치는 오버레이가 자연스럽게 보이도록)
         RenderSystem.enableBlend();
 
+        // 🔼 반드시 "모든 요소 위"에서 그리도록 Z를 크게 올림
+        gg.pose().pushPose();
+        gg.pose().translate(0, 0, 400.0f); // 아이콘/슬롯/배경 전부 위
+
+        // 1) 차지 영역(회색) 먼저
         for (Slot s : menu.slots) {
             if (!(s instanceof GridSlot gs)) continue;
-
-            // 앵커 칸만 하이라이트 (보조 칸은 표시하지 않음)
-            // 핸들러 확인
             if (!(gs.getItemHandler() instanceof GridItemHandler2D gh)) continue;
-            int anchor = gs.getGridIndex();
-            if (!gh.isAnchor(anchor)) {
-                // 비어있는 앵커 후보도 오버레이에 포함하려면 위 조건을 빼고 canPlaceAt만 검사하면 됨.
-                // 여기서는 "앵커 칸"만 시각화한다는 기존 의도에 따라 anchor만 표시.
+
+            int idx = gs.getGridIndex();
+            if (gh.isOccupied(idx)) {
+                int x = left + s.x;
+                int y = top  + s.y;
+                gg.fill(x, y, x + 16, y + 16, COLOR_OCCUPIED);
             }
-
-            boolean can = gh.canPlaceAt(anchor, carried);
-
-            int x = left + s.x;
-            int y = top  + s.y;
-            int w = 16, h = 16;
-
-            gg.fill(x, y, x + w, y + h, can ? COLOR_OK : COLOR_BAD);
         }
 
+        // 2) 커서에 든 아이템 있을 때 초록/빨강 레이어
+        ItemStack carried = menu.getCarried();
+        if (!carried.isEmpty()) {
+            for (Slot s : menu.slots) {
+                if (!(s instanceof GridSlot gs)) continue;
+                if (!(gs.getItemHandler() instanceof GridItemHandler2D gh)) continue;
+
+                int anchor = gs.getGridIndex();
+                boolean can = gh.canPlaceAt(anchor, carried);
+
+                int x = left + s.x;
+                int y = top  + s.y;
+                gg.fill(x, y, x + 16, y + 16, can ? COLOR_OK : COLOR_BAD);
+            }
+        }
+
+        gg.pose().popPose();
         RenderSystem.disableBlend();
     }
 }

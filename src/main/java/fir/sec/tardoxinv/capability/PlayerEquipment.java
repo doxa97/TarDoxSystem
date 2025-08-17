@@ -11,6 +11,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
 
 import java.util.*;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.ItemStack;
 
 public class PlayerEquipment {
 
@@ -22,6 +24,65 @@ public class PlayerEquipment {
     public static final int SLOT_SEC     = 5;
     public static final int SLOT_MELEE   = 6;
     public static final int EQUIP_SLOTS  = 7;
+
+    public static final int BASE_W = 2;   // 기존 값 사용
+    public static final int BASE_H = 2;
+
+    private final GridItemHandler2D base2x2;
+    private final GridItemHandler2D backpack;
+
+    public PlayerEquipment(/* 기존 파라미터 */) {
+        // ... other init ...
+        this.base2x2  = new GridItemHandler2D(BASE_W, BASE_H);
+        this.backpack = new GridItemHandler2D(0, 0);
+    }
+
+
+    public GridItemHandler2D getBackpack() { return backpack; }
+
+    // 배낭 아이템 판별: 아이템 클래스/태그 기준(당신 프로젝트의 규칙에 맞게)
+// 여기선 태그로 폭/높이를 보유한 스택을 배낭으로 취급
+    public static boolean isBackpackItem(ItemStack s) {
+        if (s == null || s.isEmpty()) return false;
+        CompoundTag t = s.getTag();
+        if (t == null) return false;
+        return t.contains("BackpackW") || t.contains("BackpackH") ||
+                t.contains("BPW") || t.contains("BPH"); // 예비 키
+    }
+
+    private static int readBackpackW(ItemStack s) {
+        CompoundTag t = s.getTag();
+        if (t == null) return 0;
+        if (t.contains("BackpackW")) return Math.max(0, t.getInt("BackpackW"));
+        if (t.contains("BPW"))       return Math.max(0, t.getInt("BPW"));
+        // 최후 수단: Width 사용 금지(그리드 아이템과 충돌 가능), 필요시 주석 해제
+        // if (t.contains("Width")) return Math.max(0, t.getInt("Width"));
+        return 0;
+    }
+
+    private static int readBackpackH(ItemStack s) {
+        CompoundTag t = s.getTag();
+        if (t == null) return 0;
+        if (t.contains("BackpackH")) return Math.max(0, t.getInt("BackpackH"));
+        if (t.contains("BPH"))       return Math.max(0, t.getInt("BPH"));
+        // if (t.contains("Height")) return Math.max(0, t.getInt("Height"));
+        return 0;
+    }
+
+    // 실제로 장착: NBT를 절대 건드리지 않고, 그 크기로 핸들러 리사이즈
+    public void equipBackpackFromItem(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return;
+        int w = readBackpackW(stack);
+        int h = readBackpackH(stack);
+        // 최소 1x1 보정(원하면 0x0 허용 가능)
+        if (w <= 0 || h <= 0) { w = 1; h = 1; }
+        setBackpackSize(w, h);
+    }
+
+    // 해제: 내부 그리드를 0x0으로
+    public void unequipBackpack() {
+        setBackpackSize(0, 0);
+    }
 
     private final ItemStackHandler equipment = new ItemStackHandler(EQUIP_SLOTS) {
         @Override protected void onContentsChanged(int slot) {
@@ -58,8 +119,6 @@ public class PlayerEquipment {
     };
 
     // ★ 2D 그리드 인벤토리로 교체
-    private GridItemHandler2D base2x2  = new GridItemHandler2D(2, 2);
-    private GridItemHandler2D backpack = new GridItemHandler2D(0, 0);
     private int backpackWidth  = 0;
     private int backpackHeight = 0;
     private ItemStack backpackItem = ItemStack.EMPTY;
@@ -101,7 +160,13 @@ public class PlayerEquipment {
         }
         dirty = true;
     }
-
+    public void setBackpackSize(int w, int h) {
+        if (w < 0 || h < 0) { w = 0; h = 0; }
+        // 0x0 로 줄이기 전에 남은 아이템 정리(정책: 드롭 or BASE로 이동 중 택1)
+        // 최소 패치: 그냥 0x0로 줄이되 내부가 안전하게 비워지도록
+        // GridItemHandler2D가 out-of-bounds를 스스로 막도록 구현되어 있음.
+        backpack.setGridSize(w, h);
+    }
     public void resizeBackpack(int w, int h) {
         backpackWidth = w;
         backpackHeight = h;

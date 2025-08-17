@@ -16,6 +16,9 @@ import net.minecraftforge.event.entity.player.EntityItemPickupEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
 
 @net.minecraftforge.fml.common.Mod.EventBusSubscriber
 public class ServerEvents {
@@ -191,29 +194,65 @@ public class ServerEvents {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (player.level().isClientSide) return;
 
-        ItemEntity itemEnt = event.getItem();
-        ItemStack stack = itemEnt.getItem();
+        ItemStack stack = event.getItem().getItem();
         if (stack.isEmpty()) return;
 
         player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
-            GridItemHandler2D base = eq.getBase2x2();     // 프로젝트의 실제 getter 이름에 맞춰주세요
-            GridItemHandler2D pack = eq.getBackpack2D();    // 동일
-
-            ItemStack remain = stack.copy();
-            if (base != null) remain = base.insertAnywhere(remain, false);
-            if (!remain.isEmpty() && pack != null) remain = pack.insertAnywhere(remain, false);
-
-            // 일부/전량이 들어갔으면 기본 픽업은 막고, 월드 아이템을 갱신
-            if (remain.getCount() != stack.getCount()) {
-                int picked = stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount());
-                if (remain.isEmpty()) {
-                    itemEnt.discard();                     // 전량 수납 → 월드 아이템 제거
-                } else {
-                    itemEnt.setItem(remain);               // 일부 수납 → 남은 수량만 월드에 유지
+            // 🔹 배낭 아이템은 특수 처리
+            if (PlayerEquipment.isBackpackItem(stack)) {
+                // 이미 배낭 장착 중이면 '일반 라우팅' 혹은 그대로 두기(정책 선택)
+                if (eq.getBackpack() != null && eq.getBackpack().getSlots() > 0) {
+                    // 배낭이 이미 있음 → 기본/배낭 그리드로 라우팅 시도 (원하면 '그대로 두기'로 바꿀 수 있음)
+                    ItemStack remain = stack.copy();
+                    if (eq.getBase2x2() != null) remain = eq.getBase2x2().insertAnywhere(remain, false);
+                    if (!remain.isEmpty() && eq.getBackpack() != null) remain = eq.getBackpack().insertAnywhere(remain, false);
+                    if (remain.getCount() != stack.getCount()) {
+                        // 일부/전량 수납됨 → 바닐라 픽업 취소
+                        if (remain.isEmpty()) event.getItem().discard();
+                        else event.getItem().setItem(remain);
+                        event.setCanceled(true);
+                        player.take(event.getItem(), stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount()));
+                    }
+                    return;
                 }
+
+                // 배낭 미장착 상태 → 자동 장착 (핫바/바닐라 유입 금지)
+                eq.equipBackpackFromItem(stack);
+                event.getItem().discard();       // 월드에서 제거
+                event.setCanceled(true);         // 바닐라 인벤토리 유입 차단
+                player.take(event.getItem(), stack.getCount()); // 픽업 사운드
+                return;
+            }
+
+            // 🔹 그 외 아이템은 기존 라우팅(BASE → BACKPACK)만
+            ItemStack remain = stack.copy();
+            if (eq.getBase2x2() != null) remain = eq.getBase2x2().insertAnywhere(remain, false);
+            if (!remain.isEmpty() && eq.getBackpack() != null) remain = eq.getBackpack().insertAnywhere(remain, false);
+
+            if (remain.getCount() != stack.getCount()) {
+                if (remain.isEmpty()) event.getItem().discard();
+                else event.getItem().setItem(remain);
                 event.setCanceled(true);
-                player.take(itemEnt, picked);              // 픽업 애니/사운드 처리
+                player.take(event.getItem(), stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount()));
             }
         });
     }
+
+    public static void onBackpackUnequipped(ServerPlayer player, fir.sec.tardoxinv.capability.PlayerEquipment eq, ItemStack backpackItem) {
+        // 1) 내부 그리드 제거
+        eq.unequipBackpack();
+
+        // 2) 아이템을 월드에 드롭 (즉시 재습득 방지용 딜레이)
+        if (backpackItem != null && !backpackItem.isEmpty()) {
+            ItemEntity drop = new ItemEntity(player.level(), player.getX(), player.getY() + 0.5, player.getZ(), backpackItem.copy());
+            drop.setPickUpDelay(40); // 2초
+            player.level().addFreshEntity(drop);
+        }
+
+        // 3) 열려있는 메뉴가 있으면 닫기(스테일 슬롯 방지)
+        if (player.containerMenu instanceof fir.sec.tardoxinv.menu.EquipmentMenu) {
+            player.closeContainer();
+        }
+    }
+
 }
