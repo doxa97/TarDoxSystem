@@ -1,15 +1,13 @@
-package fir.sec.tardoxinv.client;
+package fir.sec.tardoxinv.client.overlay;
 
-import fir.sec.tardoxinv.TarDoxInv;
-import fir.sec.tardoxinv.capability.ModCapabilities;
-import fir.sec.tardoxinv.capability.PlayerEquipment;
-import fir.sec.tardoxinv.menu.GridSlot;
-import fir.sec.tardoxinv.screen.EquipmentScreen;
+import com.mojang.blaze3d.systems.RenderSystem;
+import fir.sec.tardoxinv.capability.GridItemHandler2D;
+import fir.sec.tardoxinv.client.ui.ClientHotbarBindings;
+import fir.sec.tardoxinv.menu.slot.GridSlot;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.api.distmarker.Dist;
@@ -17,135 +15,127 @@ import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-/** 인벤토리(장비창) 오버레이 렌더러 */
-@Mod.EventBusSubscriber(modid = TarDoxInv.MODID, value = Dist.CLIENT)
+import java.util.List;
+import java.util.Optional;
+
+@Mod.EventBusSubscriber(value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class InventoryOverlayRenderer {
 
     @SubscribeEvent
-    public static void onRenderScreen(ScreenEvent.Render.Post e) {
-        if (!(e.getScreen() instanceof EquipmentScreen scr)) return;
-
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
+    public static void onRenderPost(ScreenEvent.Render.Post e) {
+        if (!(e.getScreen() instanceof AbstractContainerScreen<?> scr)) return;
 
         GuiGraphics g = e.getGuiGraphics();
-        Font font = mc.font;
-        int left = scr.getGuiLeft();
-        int top  = scr.getGuiTop();
+        int ox = scr.getGuiLeft();
+        int oy = scr.getGuiTop();
 
-        // (A) 멀티칸 점유 영역: 항상 표시, 호버는 진하게
-        Slot hover = scr.getSlotUnderMouse();
+        RenderSystem.enableBlend();
+
+        // 0) 바탕 그리드(슬롯 경계)
         for (Slot s : scr.getMenu().slots) {
             if (!(s instanceof GridSlot)) continue;
+            int x = ox + s.x;
+            int y = oy + s.y;
+            // 내부 살짝 음영
+            g.fill(x + 1, y + 1, x + 17, y + 17, 0x20000000);
+            // 테두리(연한 흰색)
+            g.fill(x - 1, y - 1, x + 17, y,      0x60FFFFFF);
+            g.fill(x - 1, y + 16, x + 17, y + 17,0x60FFFFFF);
+            g.fill(x - 1, y,      x,     y + 16,0x60FFFFFF);
+            g.fill(x + 16, y,     x + 17, y + 16,0x60FFFFFF);
+        }
+
+        // 1) 항상-표시: 각 아이템의 차지 영역(앵커 기준)
+        for (Slot s : scr.getMenu().slots) {
+            if (!(s instanceof GridSlot gs)) continue;
+            if (!(s.container instanceof GridItemHandler2D gh)) continue;
+
             ItemStack st = s.getItem();
             if (st.isEmpty()) continue;
+            if (!gh.isAnchor(gs.getGridIndex())) continue;
 
-            int w = st.hasTag() ? Math.max(1, st.getTag().getInt("Width")) : 1;
-            int h = st.hasTag() ? Math.max(1, st.getTag().getInt("Height")) : 1;
-            int baseX = left + s.x;
-            int baseY = top  + s.y;
+            int sw = GridItemHandler2D.stackW(st);
+            int sh = GridItemHandler2D.stackH(st);
 
-            int color = (s == hover) ? 0x66000000 : 0x33000000;
-            g.pose().pushPose();
-            g.pose().translate(0, 0, 250);
-            for (int dx=0; dx<w; dx++){
-                for (int dy=0; dy<h; dy++){
-                    int x = baseX + dx*18;
-                    int y = baseY + dy*18;
-                    g.fill(x+1, y+1, x+17, y+17, color);
-                }
-            }
-            g.pose().popPose();
+            int ax = ox + s.x;
+            int ay = oy + s.y;
+            int bx = ax + (sw * 18);
+            int by = ay + (sh * 18);
+
+            // 옅은 파랑 계열로 배경 강조
+            g.fill(ax, ay, bx, by, 0x18007ACC);
         }
 
-        // (B) 커서(carried) 아이템 프리뷰: 배치 가능/불가 영역
+        // 2) 커서 아이템 프리뷰(배치 가능=녹색, 불가=빨강)
         ItemStack carried = scr.getMenu().getCarried();
-        if (!carried.isEmpty() && hover instanceof GridSlot gs) {
-            int w = carried.hasTag() ? Math.max(1, carried.getTag().getInt("Width")) : 1;
-            int h = carried.hasTag() ? Math.max(1, carried.getTag().getInt("Height")) : 1;
-            int baseX = left + hover.x;
-            int baseY = top  + hover.y;
+        if (!carried.isEmpty()) {
+            double mx = e.getMouseX();
+            double my = e.getMouseY();
 
-            // GridSlot.mayPlace를 그대로 이용(앵커 비어있고 충돌X)
-            boolean ok = gs.mayPlace(carried);
-            int color = ok ? 0x5500FF00 : 0x55FF0000; // 가능: 초록, 불가: 빨강 (반투명)
-
-            g.pose().pushPose();
-            g.pose().translate(0, 0, 260);
-            for (int dx=0; dx<w; dx++){
-                for (int dy=0; dy<h; dy++){
-                    int x = baseX + dx*18;
-                    int y = baseY + dy*18;
-                    g.fill(x+1, y+1, x+17, y+17, color);
+            Slot hovered = null;
+            for (Slot s : scr.getMenu().slots) {
+                int x = ox + s.x, y = oy + s.y;
+                if (mx >= x && mx < x + 16 && my >= y && my < y + 16) {
+                    hovered = s; break;
                 }
             }
-            g.pose().popPose();
 
-            // 간단 툴팁 (WxH / slot_type)
-            String stype = carried.hasTag() ? carried.getTag().getString("slot_type") : "";
-            String info  = w + "×" + h + (stype.isEmpty() ? "" : "  • " + stype);
-            g.pose().pushPose();
-            g.pose().translate(0, 0, 300);
-            int mx = e.getMouseX();
-            int my = e.getMouseY();
-            int wtxt = font.width(info);
-            g.fill(mx - 3, my - 12, mx + wtxt + 3, my, 0xC0000000);
-            g.drawString(font, info, mx, my - 10, 0xFFFFFF, false);
-            g.pose().popPose();
-        }
+            if (hovered instanceof GridSlot gs && hovered.container instanceof GridItemHandler2D gh) {
+                int sw = GridItemHandler2D.stackW(carried);
+                int sh = GridItemHandler2D.stackH(carried);
 
-        // (C) 바인딩 번호 배지 (5~9): 가독성 ↑
-        mc.player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-            final int baseStart = 1 + PlayerEquipment.EQUIP_SLOTS; // 8
-            final int baseEnd   = baseStart + 4 - 1;               // 11
-            final int bpStart   = baseStart + 4;                   // 12
+                int ax = ox + hovered.x;
+                int ay = oy + hovered.y;
+                int bx = ax + (sw * 18);
+                int by = ay + (sh * 18);
 
-            for (int si = 0; si < scr.getMenu().slots.size(); si++) {
-                Slot slot = scr.getMenu().slots.get(si);
-
-                // 기본 2×2
-                if (si >= baseStart && si <= baseEnd) {
-                    int baseIdx = si - baseStart;
-                    int hotbar = findHotbarFor(cap, PlayerEquipment.Storage.BASE, baseIdx);
-                    if (hotbar >= 0) drawBadgeAbove(g, font, left + slot.x, top + slot.y, String.valueOf(hotbar + 1));
-                    continue;
-                }
-                // 배낭
-                int bpSlots = getBackpackSlots(scr.getMenu());
-                if (bpSlots > 0 && si >= bpStart && si < bpStart + bpSlots) {
-                    int bpIdx = si - bpStart;
-                    int hotbar = findHotbarFor(cap, PlayerEquipment.Storage.BACKPACK, bpIdx);
-                    if (hotbar >= 0) drawBadgeAbove(g, font, left + slot.x, top + slot.y, String.valueOf(hotbar + 1));
-                }
+                boolean can = gh.canPlaceAt(gs.getGridIndex(), carried);
+                int color = can ? 0x4066FF66 : 0x40FF6666;
+                g.fill(ax, ay, bx, by, color);
             }
-        });
-    }
-
-    private static int findHotbarFor(PlayerEquipment cap, PlayerEquipment.Storage storage, int index) {
-        for (int hb = 4; hb <= 8; hb++) {
-            PlayerEquipment.UtilBinding b = cap.peekBinding(hb);
-            if (b != null && b.storage == storage && b.index == index) return hb;
         }
-        return -1;
+
+        // 3) 유틸 바인딩 숫자 오버레이(슬롯 좌상단에 작게)
+        var font = Minecraft.getInstance().font;
+        for (Slot s : scr.getMenu().slots) {
+            if (!(s instanceof GridSlot gs)) continue;
+            Integer num = ClientHotbarBindings.getNumberFor(gs);
+            if (num == null) continue;
+
+            int x = ox + s.x;
+            int y = oy + s.y;
+            String t = String.valueOf(num);
+            g.drawString(font, t, x + 2, y + 1, 0xFFE6E6E6, true);
+        }
+
+        RenderSystem.disableBlend();
     }
 
-    private static void drawBadgeAbove(GuiGraphics g, Font font, int slotPx, int slotPy, String text) {
-        g.pose().pushPose();
-        g.pose().translate(0, 0, 300);
-        int x = slotPx + 1;
-        int y = slotPy + 1;
-        int w = font.width(text);
-        g.fill(x - 3, y - 2, x + w + 3, y + 10, 0xC0000000);
-        g.hLine(x - 3, x + w + 3, y - 2, 0x80FFFFFF);
-        g.hLine(x - 3, x + w + 3, y + 10, 0x80000000);
-        g.drawString(font, text, x, y, 0xFFFFFF, true);
-        g.pose().popPose();
-    }
+    /** 배낭 옆 고정 툴팁: 그리드 슬롯에 마우스를 올리면 슬롯 오른쪽에 툴팁 */
+    @SubscribeEvent
+    public static void onRenderTooltip(ScreenEvent.Render.Post e) {
+        if (!(e.getScreen() instanceof AbstractContainerScreen<?> scr)) return;
+        GuiGraphics g = e.getGuiGraphics();
 
-    private static int getBackpackSlots(AbstractContainerMenu menu) {
-        int total = menu.slots.size();
-        int fixed = 1 + PlayerEquipment.EQUIP_SLOTS + 4;
-        int bp = total - fixed;
-        return Math.max(0, bp);
+        double mx = e.getMouseX();
+        double my = e.getMouseY();
+        int ox = scr.getGuiLeft();
+        int oy = scr.getGuiTop();
+
+        Slot hovered = null;
+        for (Slot s : scr.getMenu().slots) {
+            int x = ox + s.x, y = oy + s.y;
+            if (mx >= x && mx < x + 16 && my >= y && my < y + 16) { hovered = s; break; }
+        }
+        if (!(hovered instanceof GridSlot)) return;
+
+        ItemStack st = hovered.getItem();
+        if (st.isEmpty()) return;
+
+        List<Component> lines = scr.getTooltipFromItem(Minecraft.getInstance(), st);
+        // 슬롯 오른쪽으로 20px 오프셋
+        int tx = ox + hovered.x + 20;
+        int ty = oy + hovered.y;
+        g.renderTooltip(Minecraft.getInstance().font, lines, Optional.empty(), tx, ty);
     }
 }

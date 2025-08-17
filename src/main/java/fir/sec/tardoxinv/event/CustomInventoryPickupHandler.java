@@ -1,198 +1,67 @@
 package fir.sec.tardoxinv.event;
 
-import fir.sec.tardoxinv.GameRuleRegister;
+import fir.sec.tardoxinv.capability.GridItemHandler2D;
 import fir.sec.tardoxinv.capability.ModCapabilities;
-import fir.sec.tardoxinv.capability.PlayerEquipment;
-import fir.sec.tardoxinv.item.ModItems;
-import fir.sec.tardoxinv.menu.EquipmentMenu;
 import fir.sec.tardoxinv.network.SyncEquipmentPacketHandler;
-import fir.sec.tardoxinv.util.LinkIdUtil;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.entity.player.EntityItemPickupEvent;
-import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.network.NetworkHooks;
-import net.minecraft.world.SimpleMenuProvider;
 
-@Mod.EventBusSubscriber
+/**
+ * 습득 우선순위:
+ *   1) 기본 2x2
+ *   2) 배낭
+ *   3) 둘 다 실패 → 바닐라(땅에 남음)
+ *
+ * 서버에서만 실제 삽입/동기화 수행.
+ */
+@Mod.EventBusSubscriber(bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class CustomInventoryPickupHandler {
 
-    @SubscribeEvent(priority = EventPriority.HIGHEST)
-    public static void onItemPickup(EntityItemPickupEvent event) {
-        Player player = event.getEntity();
-        if (!(player instanceof ServerPlayer sp)) return;
+    @SubscribeEvent
+    public static void onPickup(EntityItemPickupEvent e) {
+        Player p = e.getEntity();
+        if (!(p instanceof ServerPlayer sp)) return;
 
-        boolean useCustom = sp.getServer().getGameRules().getBoolean(GameRuleRegister.USE_CUSTOM_INVENTORY);
-        if (!useCustom) return;
+        ItemEntity ie = e.getItem();
+        ItemStack drop = ie.getItem();
+        if (drop.isEmpty()) return;
 
-        ItemStack picked = event.getItem().getItem();
-        String slotType = picked.hasTag() ? picked.getTag().getString("slot_type") : "";
-
-        sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-            LinkIdUtil.ensureLinkId(picked);
-            ItemStack toPlace = picked.copy();
-            boolean added = false;
-
-            boolean isBackpackItem =
-                    picked.is(ModItems.SMALL_BACKPACK.get()) ||
-                            picked.is(ModItems.MEDIUM_BACKPACK.get()) ||
-                            picked.is(ModItems.LARGE_BACKPACK.get()) ||
-                            "backpack".equals(slotType);
-
-            if (isBackpackItem) {
-                if (cap.getBackpackWidth() == 0 && cap.getBackpackItem().isEmpty()) {
-                    ensureBackpackDefaults(toPlace);
-                    cap.setBackpackItem(toPlace);
-
-                    if (toPlace.hasTag() && toPlace.getTag().contains("BackpackData")) {
-                        restoreBackpackContents(cap, toPlace.getTag().getCompound("BackpackData"));
-                    }
-                    added = true;
-
-                    if (sp.containerMenu instanceof EquipmentMenu) {
-                        int bw = cap.getBackpackWidth(), bh = cap.getBackpackHeight();
-                        NetworkHooks.openScreen(
-                                sp,
-                                new SimpleMenuProvider(
-                                        (id, inv, ply) -> new EquipmentMenu(id, inv, bw, bh),
-                                        Component.literal("Equipment")
-                                ),
-                                buf -> { buf.writeVarInt(bw); buf.writeVarInt(bh); }
-                        );
-                    }
-                } else {
-                    added = placeInBackpackGrid(cap, toPlace);
-                    if (!added) added = tryAddToBase2x2(cap, toPlace);
-                }
-            } else {
-                if (!slotType.isEmpty()) {
-                    added = tryEquip(cap, toPlace, slotType);
-                }
-                if (!added) added = placeInBackpackGrid(cap, toPlace);
-                if (!added) {
-                    int w = getW(toPlace), h = getH(toPlace);
-                    if (w == 1 && h == 1) added = tryAddToBase2x2(cap, toPlace);
-                }
-                if (!added) {
-                    sp.displayClientMessage(Component.literal("배낭에 공간이 부족합니다."), true);
-                }
+        sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
+            // 1) 기본 2x2 먼저
+            GridItemHandler2D base = eq.getBase2x2();
+            int idx = findFirstFit(base, drop);
+            if (idx >= 0) {
+                base.insertItem2D(idx, drop.copy(), false);
+                ie.discard();
+                e.setCanceled(true);
+                SyncEquipmentPacketHandler.syncToClient(sp, eq);
+                return;
             }
 
-            if (added) {
-                event.getItem().discard();
-                event.setCanceled(true);
-                cap.applyWeaponsToHotbar(sp);
-                SyncEquipmentPacketHandler.syncToClient(sp, cap);
+            // 2) 배낭로
+            if (eq.getBackpackWidth() > 0 && eq.getBackpackHeight() > 0) {
+                GridItemHandler2D bp = eq.getBackpack2D(); // ← new 브랜치 메서드명
+                int id2 = findFirstFit(bp, drop);
+                if (id2 >= 0) {
+                    bp.insertItem2D(id2, drop.copy(), false);
+                    ie.discard();
+                    e.setCanceled(true);
+                    SyncEquipmentPacketHandler.syncToClient(sp, eq);
+                }
             }
         });
     }
 
-    /* ---- 유틸 ---- */
-
-    private static void ensureBackpackDefaults(ItemStack stack) {
-        var tag = stack.getOrCreateTag();
-        if (tag.getInt("Width") <= 0)  tag.putInt("Width",  2);
-        if (tag.getInt("Height") <= 0) tag.putInt("Height", 4);
-        tag.putString("slot_type", "backpack");
-    }
-
-    private static boolean tryEquip(PlayerEquipment cap, ItemStack stack, String type) {
-        var eq = cap.getEquipment();
-        PlayerEquipment.ensureLink(stack);
-        switch (type) {
-            case "primary_weapon" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_PRIM1).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_PRIM1, stack); return true; }
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_PRIM2).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_PRIM2, stack); return true; }
-            }
-            case "secondary_weapon" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_SEC).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_SEC, stack); return true; }
-            }
-            case "melee_weapon" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_MELEE).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_MELEE, stack); return true; }
-            }
-            case "helmet" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_HELMET).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_HELMET, stack); return true; }
-            }
-            case "vest" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_VEST).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_VEST, stack); return true; }
-            }
-            case "headset" -> {
-                if (eq.getStackInSlot(PlayerEquipment.SLOT_HEADSET).isEmpty()) { eq.setStackInSlot(PlayerEquipment.SLOT_HEADSET, stack); return true; }
-            }
+    private static int findFirstFit(GridItemHandler2D inv, ItemStack st) {
+        if (inv == null || st.isEmpty()) return -1;
+        for (int i = 0; i < inv.getSlots(); i++) {
+            if (inv.canPlaceAt(i, st)) return i;
         }
-        return false;
-    }
-
-    private static boolean tryAddToBase2x2(PlayerEquipment cap, ItemStack stack) {
-        var base = cap.getBase2x2();
-        for (int i = 0; i < base.getSlots(); i++) {
-            if (base.getStackInSlot(i).isEmpty()) { base.setStackInSlot(i, stack); return true; }
-        }
-        return false;
-    }
-
-    private static boolean placeInBackpackGrid(PlayerEquipment cap, ItemStack stack) {
-        int itemW = getW(stack), itemH = getH(stack);
-        int BW = cap.getBackpackWidth(), BH = cap.getBackpackHeight();
-        if (BW <= 0 || BH <= 0) return false;
-
-        var handler = tryGetBackpackHandler(cap);
-        if (handler == null) return false;
-
-        int size = handler.getSlots(); // 보통 BW*BH
-        for (int anchor = 0; anchor < size; anchor++) {
-            int ax = anchor % BW, ay = anchor / BW;
-            if (ax + itemW > BW || ay + itemH > BH) continue;
-
-            boolean ok = true;
-            for (int dx = 0; dx < itemW && ok; dx++) {
-                for (int dy = 0; dy < itemH; dy++) {
-                    int nid = (ax + dx) + (ay + dy) * BW;
-                    if (nid < 0 || nid >= size) { ok = false; break; }
-                    if (!handler.getStackInSlot(nid).isEmpty()) { ok = false; break; }
-                }
-            }
-            if (!ok) continue;
-
-            handler.setStackInSlot(anchor, stack);
-            return true;
-        }
-        return false;
-    }
-
-    private static void restoreBackpackContents(PlayerEquipment cap, net.minecraft.nbt.CompoundTag data) {
-        int w = Math.max(0, data.getInt("Width"));
-        int h = Math.max(0, data.getInt("Height"));
-        cap.resizeBackpack(w, h);
-
-        var itemsNbt = data.getCompound("Items");
-        var handler = tryGetBackpackHandler(cap);
-        if (handler != null) {
-            try { handler.deserializeNBT(itemsNbt); } catch (Exception ignored) {}
-        }
-    }
-
-    private static int getW(ItemStack st) {
-        return st.hasTag() ? Math.max(1, st.getTag().getInt("Width")) : 1;
-    }
-    private static int getH(ItemStack st) {
-        return st.hasTag() ? Math.max(1, st.getTag().getInt("Height")) : 1;
-    }
-
-    /** 2D/1D 어떤 구현이건 리플렉션으로 안전 획득 */
-    private static net.minecraftforge.items.ItemStackHandler tryGetBackpackHandler(PlayerEquipment cap) {
-        try {
-            var m = cap.getClass().getMethod("getBackpack2D");
-            return (net.minecraftforge.items.ItemStackHandler) m.invoke(cap);
-        } catch (Exception ignore) { }
-        try {
-            var m = cap.getClass().getMethod("getBackpack");
-            return (net.minecraftforge.items.ItemStackHandler) m.invoke(cap);
-        } catch (Exception ignore) { }
-        return null;
+        return -1;
     }
 }

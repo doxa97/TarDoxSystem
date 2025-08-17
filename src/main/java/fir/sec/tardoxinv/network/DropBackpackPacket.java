@@ -1,115 +1,61 @@
 package fir.sec.tardoxinv.network;
 
 import fir.sec.tardoxinv.capability.ModCapabilities;
-import fir.sec.tardoxinv.menu.EquipmentMenu;
-import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.chat.Component;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.SimpleMenuProvider;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.network.NetworkEvent;
-import net.minecraftforge.network.NetworkHooks;
 
-import java.util.HashSet;
-import java.util.Set;
 import java.util.function.Supplier;
 
+/**
+ * 배낭 드롭:
+ *  1) 현재 배낭 내부(Grid)를 NBT로 배낭 아이템에 저장
+ *  2) 월드에 드롭
+ *  3) 플레이어 쪽 바인딩/배낭 상태 정리(삭제 아님)
+ *  4) 클라 동기화
+ *
+ * 페이로드 없는 단순 패킷(encode/decode 비어있음)
+ */
 public class DropBackpackPacket {
 
-    public static void encode(DropBackpackPacket m, FriendlyByteBuf b) {}
-    public static DropBackpackPacket decode(FriendlyByteBuf b) { return new DropBackpackPacket(); }
+    // ---- 페이로드 없음 ----
+    public static void encode(DropBackpackPacket pkt, net.minecraft.network.FriendlyByteBuf buf) { }
+    public static DropBackpackPacket decode(net.minecraft.network.FriendlyByteBuf buf) { return new DropBackpackPacket(); }
 
-    public static void handle(DropBackpackPacket m, Supplier<NetworkEvent.Context> ctx) {
+    public static void handle(DropBackpackPacket pkt, Supplier<NetworkEvent.Context> ctx) {
         ctx.get().enqueueWork(() -> {
             ServerPlayer sp = ctx.get().getSender();
             if (sp == null) return;
 
-            sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(cap -> {
-                ItemStack cur = cap.getBackpackItem();
-                if (cur.isEmpty()) return;
+            sp.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
+                ItemStack curBp = eq.getBackpackItem(); // 착용중 배낭 아이템(겉보기)
+                if (curBp.isEmpty()) return;
 
-                // 0) 현재 배낭 내부의 link_id 수집(이후 핫바 5~9 해제에 사용)
-                Set<java.util.UUID> backpackIds = new HashSet<>();
-                try {
-                    var getBp = cap.getClass().getMethod("getBackpack2D");
-                    var bp = (net.minecraftforge.items.ItemStackHandler) getBp.invoke(cap);
-                    for (int i = 0; i < bp.getSlots(); i++) {
-                        ItemStack it = bp.getStackInSlot(i);
-                        if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")) {
-                            backpackIds.add(it.getTag().getUUID("link_id"));
-                        }
-                    }
-                } catch (Exception ignore) {
-                    try {
-                        var getBp = cap.getClass().getMethod("getBackpack");
-                        var bp = (net.minecraftforge.items.ItemStackHandler) getBp.invoke(cap);
-                        for (int i = 0; i < bp.getSlots(); i++) {
-                            ItemStack it = bp.getStackInSlot(i);
-                            if (!it.isEmpty() && it.hasTag() && it.getTag().hasUUID("link_id")) {
-                                backpackIds.add(it.getTag().getUUID("link_id"));
-                            }
-                        }
-                    } catch (Exception ignored) { }
-                }
+                // 1) 내부 인벤 직렬화
+                CompoundTag data = new CompoundTag();
+                data.putInt("W", eq.getBackpackWidth());
+                data.putInt("H", eq.getBackpackHeight());
+                data.put("Items", eq.getBackpack2D().serializeNBT()); // ← new 브랜치 메서드명
 
-                // 1) UI 먼저 닫기(안전)
-                if (sp.containerMenu != null) sp.closeContainer();
+                // 2) 배낭 아이템에 NBT 저장
+                ItemStack drop = curBp.copy();
+                drop.getOrCreateTag().put("BackpackData", data);
 
-                // 2) 드롭 아이템(NBT 포함)
-                ItemStack out = cur.copy();
-                var data = new net.minecraft.nbt.CompoundTag();
-                data.putInt("Width",  cap.getBackpackWidth());
-                data.putInt("Height", cap.getBackpackHeight());
-                // getBackpack2D 우선
-                net.minecraft.nbt.CompoundTag itemsNbt = new net.minecraft.nbt.CompoundTag();
-                try {
-                    var getBp = cap.getClass().getMethod("getBackpack2D");
-                    var bp = (net.minecraftforge.items.ItemStackHandler) getBp.invoke(cap);
-                    itemsNbt = bp.serializeNBT();
-                } catch (Exception ignore) {
-                    try {
-                        var getBp = cap.getClass().getMethod("getBackpack");
-                        var bp = (net.minecraftforge.items.ItemStackHandler) getBp.invoke(cap);
-                        itemsNbt = bp.serializeNBT();
-                    } catch (Exception ignored) { }
-                }
-                data.put("Items", itemsNbt);
-                out.getOrCreateTag().put("BackpackData", data);
-
-                ItemEntity ent = new ItemEntity(sp.level(), sp.getX(), sp.getY() + 1.0, sp.getZ(), out);
-                ent.setPickUpDelay(60);
+                // 3) 월드에 드롭
+                ItemEntity ent = new ItemEntity(sp.level(), sp.getX(), sp.getY() + 0.5, sp.getZ(), drop);
                 sp.level().addFreshEntity(ent);
 
-                // 3) 캡 상태 초기화
-                cap.setBackpackItem(ItemStack.EMPTY);
-                cap.resizeBackpack(0, 0);
+                // 4) 플레이어 쪽 정리: 유틸 바인딩 해제 + 배낭 초기화 + 착용 해제
+                //  - new 브랜치: clearAllUtilityBindings() 이름을 사용하는 것으로 가정
+                //    (이름이 다르면 기존 clearBindingsInsideBackpack() 으로 교체)
+                eq.clearAllUtilityBindings();
+                eq.resizeBackpack(0, 0);
+                eq.setBackpackItem(ItemStack.EMPTY);
 
-                // 4) 배낭 유틸 link_id와 매치되는 핫바(5~9) 즉시 비움
-                for (int i = 4; i <= 8; i++) {
-                    ItemStack hb = sp.getInventory().getItem(i);
-                    if (hb.isEmpty() || !hb.hasTag() || !hb.getTag().hasUUID("link_id")) continue;
-                    java.util.UUID id = hb.getTag().getUUID("link_id");
-                    if (backpackIds.contains(id)) {
-                        sp.getInventory().setItem(i, ItemStack.EMPTY);
-                        // 컨테이너 슬롯도 동기화
-                        if (sp.inventoryMenu != null) {
-                            sp.inventoryMenu.broadcastChanges();
-                        }
-                    }
-                }
-
-                // 5) 클라 동기화 + 0x0로 재오픈
-                SyncEquipmentPacketHandler.syncToClient(sp, cap);
-                int bw = 0, bh = 0;
-                NetworkHooks.openScreen(
-                        sp,
-                        new SimpleMenuProvider(
-                                (id, inv, ply) -> new EquipmentMenu(id, inv, bw, bh),
-                                Component.literal("Equipment")
-                        ),
-                        buf -> { buf.writeVarInt(bw); buf.writeVarInt(bh); }
-                );
+                // 5) 동기화
+                SyncEquipmentPacketHandler.syncToClient(sp, eq);
             });
         });
         ctx.get().setPacketHandled(true);

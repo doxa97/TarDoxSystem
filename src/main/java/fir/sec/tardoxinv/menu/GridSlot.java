@@ -1,42 +1,25 @@
 package fir.sec.tardoxinv.menu;
 
-import fir.sec.tardoxinv.capability.GridItemHandler2D;
-import net.minecraft.world.item.ItemStack;
-import net.minecraftforge.items.SlotItemHandler;
+import fir.sec.tardoxinv.menu.slot.GridSlot.Storage;
 
-/** 2D 그리드용 슬롯: 앵커 위치에만 배치 허용, 점유 영역과 충돌 시 거부.
- *  UI에서의 수동 배치는 '앵커가 비어있는 경우'에만 허용(기존 아이템 덮어쓰기 방지). */
-public class GridSlot extends SlotItemHandler {
-    public enum Storage { BASE, BACKPACK }
+/**
+ * 호환용 브리지:
+ * - 일부 코드가 fir.sec.tardoxinv.menu.GridSlot 을 임포트/생성자 사용
+ * - 실제 구현은 fir.sec.tardoxinv.menu.slot.GridSlot 이고,
+ *   여기서는 생성자 시그니처를 사용처에 맞춰 제공한다.
+ */
+public class GridSlot extends fir.sec.tardoxinv.menu.slot.GridSlot {
 
-    private final GridItemHandler2D grid;
-    private final int gridIndex;
-    private final Storage storage;
-
-    public GridSlot(GridItemHandler2D handler, int index, int x, int y, Storage storage){
-        super(handler, index, x, y);
-        this.grid = handler;
-        this.gridIndex = index;
-        this.storage = storage;
+    /** 사용처: new GridSlot(handler, index, x, y, Storage) */
+    public GridSlot(net.minecraftforge.items.IItemHandler handler,
+                    int index, int x, int y, Storage storage) {
+        super(storage, handler, index, x, y);
     }
 
-    public Storage getStorage(){ return storage; }
-    public int getGridIndex(){ return gridIndex; }
-
-    @Override
-    public boolean mayPlace(ItemStack stack) {
-        // 앵커가 비어있고, 영역 충돌이 없을 때만 배치 허용
-        return grid.getStackInSlot(gridIndex).isEmpty() && grid.canPlaceAt(gridIndex, stack);
-    }
-
-    @Override
-    public void set(ItemStack stack) {
-        super.set(stack); // handler.setStackInSlot → 영역 점유 처리
-    }
-
-    @Override
-    public boolean mayPickup(net.minecraft.world.entity.player.Player player) {
-        // 앵커 슬롯만 꺼낼 수 있음
-        return grid.isAnchor(this.getSlotIndex());
+    /** 사용처: new GridSlot(Storage, handler, index, x, y) (직접 호출 시) */
+    public GridSlot(Storage storage,
+                    net.minecraftforge.items.IItemHandler handler,
+                    int index, int x, int y) {
+        super(storage, handler, index, x, y);
     }
 }
