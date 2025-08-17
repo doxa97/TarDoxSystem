@@ -58,9 +58,4 @@ public class GridSlot extends SlotItemHandler {
         return super.mayPlace(stack);
     }
 
-    @Override
-    public int getMaxStackSize(ItemStack stack) {
-        // 다칸 아이템 모델에서는 앵커 칸에 "1"만 실체를 둠
-        return 1;
-    }
 }
