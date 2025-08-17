@@ -188,6 +188,7 @@ public class ServerEvents {
     }
     @SubscribeEvent
     public static void onPickup(EntityItemPickupEvent event) {
+        if (event.isCanceled()) return; // 🔹 이미 다른 핸들러가 처리했으면 스킵
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (player.level().isClientSide) return;
 
