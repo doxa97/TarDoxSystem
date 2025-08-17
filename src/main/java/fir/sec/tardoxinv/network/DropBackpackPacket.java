@@ -34,14 +34,17 @@ public class DropBackpackPacket {
                 if (curBp.isEmpty()) return;
 
                 // 1) 내부 인벤 직렬화
+                // 1) 내부 인벤 직렬화
                 CompoundTag data = new CompoundTag();
-                data.putInt("W", eq.getBackpackWidth());
-                data.putInt("H", eq.getBackpackHeight());
-                data.put("Items", eq.getBackpack2D().serializeNBT()); // ← new 브랜치 메서드명
+// ❌ 기존: data.putInt("W", ...), data.putInt("H", ...)
+                data.putInt("Width",  eq.getBackpackWidth());
+                data.putInt("Height", eq.getBackpackHeight());
+                data.put("Items", eq.getBackpack2D().serializeNBT()); // GridItemHandler2D NBT (W/H 포함)
 
-                // 2) 배낭 아이템에 NBT 저장
+// 2) 배낭 아이템에 NBT 저장
                 ItemStack drop = curBp.copy();
                 drop.getOrCreateTag().put("BackpackData", data);
+
 
                 // 3) 월드에 드롭
                 ItemEntity ent = new ItemEntity(sp.level(), sp.getX(), sp.getY() + 0.5, sp.getZ(), drop);

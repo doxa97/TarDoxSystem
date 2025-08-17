@@ -189,51 +189,6 @@ public class ServerEvents {
             m2.invoke(cap, sp);
         } catch (Exception ignore) { }
     }
-    @SubscribeEvent
-    public static void onPickup(EntityItemPickupEvent event) {
-        if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.level().isClientSide) return;
-
-        ItemStack stack = event.getItem().getItem();
-        if (stack.isEmpty()) return;
-
-        player.getCapability(ModCapabilities.EQUIPMENT).ifPresent(eq -> {
-            // ✅ 배낭 아이템
-            if (PlayerEquipment.isBackpackItem(stack)) {
-                boolean hasBP = eq.getBackpack() != null && eq.getBackpack().getSlots() > 0;
-
-                if (hasBP) {
-                    // 이미 배낭 장착 중 → 절대 주우지 않음 (월드에 남김)
-                    event.getItem().setPickUpDelay(40);
-                    event.setCanceled(true);
-                    return;
-                } else {
-                    // 미장착 → 자동 장착, 핫바 유입 금지
-                    eq.equipBackpackFromItem(stack);
-                    // 월드 아이템 제거 + 바닐라 픽업 취소
-                    event.getItem().discard();
-                    event.setCanceled(true);
-                    // 효과음 표시
-                    player.take(event.getItem(), stack.getCount());
-                    // TODO: 여기서 capability 동기화 패킷 송신(e.g., SyncEquipmentPacket)
-                    return;
-                }
-            }
-
-            // ✅ 일반 아이템: BASE → BACKPACK 라우팅만 (바닐라 인벤토리/핫바 사용 안함)
-            ItemStack remain = stack.copy();
-            if (eq.getBase2x2() != null) remain = eq.getBase2x2().insertAnywhere(remain, false);
-            if (!remain.isEmpty() && eq.getBackpack() != null) remain = eq.getBackpack().insertAnywhere(remain, false);
-
-            if (remain.getCount() != stack.getCount()) {
-                if (remain.isEmpty()) event.getItem().discard();
-                else event.getItem().setItem(remain);
-                event.setCanceled(true);
-                player.take(event.getItem(), stack.getCount() - (remain.isEmpty() ? 0 : remain.getCount()));
-                // TODO: 동기화 패킷
-            }
-        });
-    }
 
 
     public static void onBackpackUnequipped(ServerPlayer player, fir.sec.tardoxinv.capability.PlayerEquipment eq, ItemStack backpackItem) {

@@ -71,16 +71,8 @@ public class PlayerEquipment {
     // 실제로 장착: NBT를 절대 건드리지 않고, 그 크기로 핸들러 리사이즈
     public void equipBackpackFromItem(ItemStack src) {
         if (src == null || src.isEmpty()) return;
-        int w = Math.max(1, readBPW(src));
-        int h = Math.max(1, readBPH(src));
-
-        this.setBackpackSize(w, h);                 // 0×0 방지
-        CompoundTag tag = src.getTag();
-        if (tag != null && tag.contains("BackpackInv")) {
-            this.getBackpack().deserializeNBT(tag.getCompound("BackpackInv"));
-            this.getBackpack().markCoverageDirty(); // 커버리지 재구축 플래그
-        }
-        this.equippedBackpackItem = src.copy();     // 원본 스택 보관 (후에 드롭용)
+        // 기존의 readBPW/BPH / BackpackInv 복원 로직 제거
+        setBackpackItem(src); // ← 장착은 이 함수 하나로 통일
     }
 
 
